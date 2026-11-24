@@ -881,20 +881,32 @@ mod tests {
             let status: serde_json::Value =
                 serde_json::from_str(&take(sbj_session_status_json(s))).unwrap();
             assert_eq!(status["dirty"], true);
-            // CI machines have no audio devices.
-            assert_eq!(status["outputs"][0]["status"], "offline");
-            assert!(
-                status["problems"].as_array().unwrap().is_empty(),
-                "not loaded: no output"
-            );
-
+            // Works with or without an audio device (Linux CI has none;
+            // macOS CI runners have one).
+            let has_device = status["outputs"][0]["status"] == "running";
+            let problems = status["problems"].as_array().unwrap();
             let mut states = [std::mem::zeroed::<SbjCueState>(); 3];
             assert_eq!(
                 sbj_session_cue_states(s, 0, 3, states.as_mut_ptr()),
                 SbjStatus::Ok
             );
-            assert!(states[2].assigned && !states[2].ready);
-            assert_eq!(sbj_session_fire_cue(s, 2), SbjStatus::NoOutput);
+            assert!(states[2].assigned);
+            if has_device {
+                assert!(states[2].ready);
+                assert!(
+                    problems[0]["message"]
+                        .as_str()
+                        .unwrap()
+                        .contains("nope.wav")
+                );
+                assert_eq!(sbj_session_set_master_gain(s, 0.0), SbjStatus::Ok);
+                assert_eq!(sbj_session_fire_cue(s, 2), SbjStatus::Ok);
+            } else {
+                assert_eq!(status["outputs"][0]["status"], "offline");
+                assert!(!states[2].ready);
+                assert!(problems.is_empty(), "not loaded: no output");
+                assert_eq!(sbj_session_fire_cue(s, 2), SbjStatus::NoOutput);
+            }
             assert_eq!(sbj_session_fire_cue(s, 0), SbjStatus::Ok, "empty pad");
             assert_eq!(sbj_session_fire_cue(s, 999), SbjStatus::InvalidArgument);
             assert_eq!(sbj_session_move_cue(s, 2, 5), SbjStatus::Ok);
