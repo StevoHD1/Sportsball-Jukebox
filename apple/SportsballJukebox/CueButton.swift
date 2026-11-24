@@ -209,7 +209,7 @@ private struct PadFace: View {
             }
             Spacer(minLength: 0)
             if state.holding {
-                Text("VAMP · press to go")
+                Text("VAMP")
                     .font(.caption2.weight(.bold))
                     .padding(.horizontal, 5)
                     .padding(.vertical, 1)
