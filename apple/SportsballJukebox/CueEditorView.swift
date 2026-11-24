@@ -191,6 +191,7 @@ struct CueEditorView: View {
 // MARK: - Header
 
 private struct EditorHeader: View {
+    @EnvironmentObject private var model: AppModel
     @Binding var draft: CueDoc
     let outputs: [OutputDoc]
     let conflict: String?
