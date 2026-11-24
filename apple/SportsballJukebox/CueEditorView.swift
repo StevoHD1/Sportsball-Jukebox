@@ -239,6 +239,14 @@ private struct EditorHeader: View {
 
                 MidiField(trigger: $draft.midi, slot: draft.slot)
 
+                HStack(spacing: 6) {
+                    Text("Sponsor")
+                    TextField("none", text: sponsor)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 140)
+                }
+                .help("Credited in the Game Log's sponsor report each time this pad plays")
+
                 Spacer()
 
                 if let conflict {
@@ -258,6 +266,13 @@ private struct EditorHeader: View {
                 let key = text.trimmingCharacters(in: .whitespaces).lowercased().suffix(1)
                 draft.hotkey = key.isEmpty ? nil : String(key)
             }
+        )
+    }
+
+    private var sponsor: Binding<String> {
+        Binding(
+            get: { draft.sponsor ?? "" },
+            set: { draft.sponsor = $0.trimmingCharacters(in: .whitespaces).isEmpty ? nil : $0 }
         )
     }
 

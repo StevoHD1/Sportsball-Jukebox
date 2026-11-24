@@ -30,9 +30,12 @@ use sbj_engine::{
 use sbj_media::MediaError;
 
 pub mod control;
+pub mod log;
 mod playback;
 mod playlist;
 mod preview;
+
+pub use log::{LogEntry, LogTotal};
 
 pub use preview::PreviewState;
 mod preflight;
@@ -335,6 +338,7 @@ pub struct Session<B: AudioBackend> {
     playlists: HashMap<u32, playlist::PlaylistState>,
     /// The pad being previewed, and on which output.
     previewing: Option<(u32, usize)>,
+    log: log::PlayLog,
 }
 
 impl<B: AudioBackend> Session<B> {
@@ -362,6 +366,7 @@ impl<B: AudioBackend> Session<B> {
             recent_fires: HashMap::new(),
             playlists: HashMap::new(),
             previewing: None,
+            log: log::PlayLog::new(),
         }
     }
 
@@ -1097,8 +1102,11 @@ impl<B: AudioBackend> Session<B> {
             while live.controller.poll_event().is_some() {}
             live.controller.collect_garbage();
         }
+        self.log.source = "auto";
         self.advance_playlists();
+        self.log.source = "operator";
         self.update_ducking();
+        self.update_log();
         let now = Instant::now();
         for index in 0..self.outputs.len() {
             let failed = self.outputs[index]

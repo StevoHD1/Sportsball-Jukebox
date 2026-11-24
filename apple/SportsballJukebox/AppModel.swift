@@ -46,6 +46,7 @@ final class AppModel: ObservableObject {
     @Published var showingSettings = false
     @Published var showingControls = false
     @Published var showingPreflight = false
+    @Published var showingLog = false
     @Published var showingNowPlaying: Bool = UserDefaults.standard.object(forKey: "showNowPlaying") as? Bool ?? true {
         didSet { UserDefaults.standard.set(showingNowPlaying, forKey: "showNowPlaying") }
     }
@@ -96,6 +97,7 @@ final class AppModel: ObservableObject {
         )
 
         refreshDevices()
+        session.setLogDirectory(Self.logDirectory)
         session.openOutputs()
         refreshShow()
         applyMIDI()
@@ -410,6 +412,76 @@ final class AppModel: ObservableObject {
             cue.hotkey = freeHotkey(preferring: slot)
         }
         updateCue(cue)
+    }
+
+    // MARK: - Play log
+
+    /// Daily log files (one JSON line per play) live here.
+    static var logDirectory: URL {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
+            .first ?? URL(fileURLWithPath: NSTemporaryDirectory())
+        return base.appendingPathComponent("Sportsball Jukebox/Logs", isDirectory: true)
+    }
+
+    var game: String { status?.game ?? "" }
+
+    func setGame(_ name: String) {
+        session.setGame(name)
+        refreshStatus()
+    }
+
+    func playLog() -> PlayLog {
+        session.playLog()
+    }
+
+    func clearLog() {
+        session.clearLog()
+    }
+
+    func openLogFolder() {
+        try? FileManager.default.createDirectory(at: Self.logDirectory, withIntermediateDirectories: true)
+        NSWorkspace.shared.open(Self.logDirectory)
+    }
+
+    /// Writes the log as CSV (local date and time) for licensing or
+    /// sponsor reports.
+    func exportLog(_ log: PlayLog) {
+        let panel = NSSavePanel()
+        panel.title = "Export Play Log"
+        panel.allowedContentTypes = [.commaSeparatedText]
+        let day = ISO8601DateFormatter.string(from: Date(), timeZone: .current, formatOptions: [.withFullDate])
+        panel.nameFieldStringValue = "Play log \(game.isEmpty ? day : game).csv"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        let date = DateFormatter()
+        date.dateFormat = "yyyy-MM-dd"
+        let time = DateFormatter()
+        time.dateFormat = "HH:mm:ss"
+        func field(_ s: String) -> String {
+            "\"" + s.replacingOccurrences(of: "\"", with: "\"\"") + "\""
+        }
+        var lines = ["Date,Time,Game,Show,Bank,Pad,Title,File,Sponsor,Triggered by,Output,Seconds"]
+        for e in log.entries {
+            let row: [String] = [
+                date.string(from: e.startDate),
+                time.string(from: e.startDate),
+                field(e.game),
+                field(e.show),
+                String(e.bank),
+                String(e.pad),
+                field(e.title),
+                field(e.fileName),
+                field(e.sponsor ?? ""),
+                e.source,
+                field(e.output),
+                String(format: "%.1f", e.seconds),
+            ]
+            lines.append(row.joined(separator: ","))
+        }
+        do {
+            try lines.joined(separator: "\n").write(to: url, atomically: true, encoding: .utf8)
+        } catch {
+            alert = AlertMessage(title: "Could not export", message: error.localizedDescription)
+        }
     }
 
     // MARK: - Preview

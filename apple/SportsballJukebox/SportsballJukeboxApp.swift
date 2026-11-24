@@ -33,6 +33,8 @@ struct SportsballJukeboxApp: App {
                     model.showingNowPlaying.toggle()
                 }
                 .keyboardShortcut("p", modifiers: [.command, .shift])
+                Button("Game Log…") { model.showingLog = true }
+                    .keyboardShortcut("l", modifiers: [.command, .shift])
                 Button("Pre-game Check…") {
                     model.runPreflight()
                     model.showingPreflight = true

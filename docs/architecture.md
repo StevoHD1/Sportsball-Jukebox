@@ -1,6 +1,6 @@
 # Sportsball Jukebox: Architecture
 
-Status: Phase 6 (operator awareness and preview). Last updated 2026-11-24.
+Status: Phase 7 (game log and reports). Last updated 2026-11-24.
 
 ## Goals, in priority order
 
@@ -340,6 +340,24 @@ sources feed every routed channel; multichannel sources map channel by
 channel. A route beyond the device's channels is reported as a problem
 and the cue plays on all channels.
 
+## Play log (Phase 7)
+
+`sbj-session/src/log.rs` records each time a pad or playlist song starts:
+the time, game name, show, bank and pad, title, the audio file, the
+sponsor (a per-pad field), the output, and what triggered it (`operator`,
+`midi`, `osc`, or `auto` for playlist auto-advance). Entries close when
+the sound stops, finishes or is replaced, and the time played is
+measured on the wall clock. Closed entries are appended as JSON lines to
+`<log dir>/YYYY-MM-DD.jsonl` (UTC days) straight away, so a crash loses
+nothing. The app sets the log directory to
+`~/Library/Application Support/Sportsball Jukebox/Logs`. All file
+writing happens on the control thread during `poll`, never on the audio
+thread.
+
+The Game Log window shows recent plays, totals per song (for music
+licensing returns) and per sponsor (for sponsorship fulfilment), and
+exports CSV with local dates and times.
+
 ## Performance
 
 `cargo run --release -p sbj-engine --example bench` renders 30 s in
@@ -451,7 +469,13 @@ CI.
 - Headphone preview: ⌥-click a pad (or Preview in its menu or editor) to
   hear it on the preview output only.
 
+**Phase 7: Game log and reports (built; awaiting Mac testing)**
+- Play log of every pad and playlist song, with source, sponsor, output
+  and time played; written to daily files as it happens.
+- Game name stamped on entries; per-pad sponsor.
+- Game Log window: plays, song totals, sponsor totals, CSV export.
+
 **Next candidates**
-- Recording a game log (what fired when) for sponsor or licensing
-  reports.
+- Remote control from a phone or tablet (a small web page served by the
+  app over the local network).
 - Signed releases once there is a Developer account.

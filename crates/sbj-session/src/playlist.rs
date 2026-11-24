@@ -256,6 +256,7 @@ impl<B: AudioBackend> Session<B> {
             state.item_seconds = seconds;
             state.advanced = false;
         }
+        self.log_start(slot, Some(item));
         Ok(())
     }
 

@@ -165,6 +165,16 @@ built-in speakers or headphones)
       panel shows a blue Preview row with a stop button. ⌥-click again
       stops it. Groups and ducking are not affected.
 
+**Phase 7: game log**
+- [ ] Show → Game Log (⇧⌘L): set the game name, fire a few pads, refresh.
+      Each play is listed with time, pad, song, what triggered it and how
+      long it played.
+- [ ] Give a pad a sponsor in its editor and fire it: the Sponsors tab
+      counts it.
+- [ ] Export CSV and open it in Numbers or Excel.
+- [ ] Open Log Folder: today's file contains a line per play, even after
+      quitting.
+
 **Stress**
 - [ ] Leave a looping cue running for 10+ minutes. The status line should
       not start showing "glitches".

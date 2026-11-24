@@ -57,6 +57,10 @@ struct ContentView: View {
             PreflightView()
                 .environmentObject(model)
         }
+        .sheet(isPresented: $model.showingLog) {
+            GameLogView()
+                .environmentObject(model)
+        }
     }
 }
 
@@ -99,6 +103,7 @@ private struct HeaderBar: View {
             } label: {
                 Label("Now Playing", systemImage: "sidebar.right")
             }
+            .labelStyle(.iconOnly)
             .help("Show or hide the Now Playing panel")
 
             Button {
@@ -107,6 +112,14 @@ private struct HeaderBar: View {
             } label: {
                 Label("Pre-game Check", systemImage: "checklist")
             }
+
+            Button {
+                model.showingLog = true
+            } label: {
+                Label("Game Log", systemImage: "list.bullet.rectangle")
+            }
+            .labelStyle(.iconOnly)
+            .help("What played, for licensing and sponsor reports")
             .help("Check devices, files, keys and MIDI before the game")
 
             Button {
@@ -114,6 +127,7 @@ private struct HeaderBar: View {
             } label: {
                 Label("MIDI & OSC", systemImage: "pianokeys")
             }
+            .labelStyle(.iconOnly)
             .help("External control: MIDI controllers, OSC, Stream Deck")
 
             Image(systemName: "speaker.wave.2.fill")

@@ -245,6 +245,29 @@ final class EngineSession: @unchecked Sendable {
         try Engine.check(sbj_session_fire_cue(handle, UInt32(slot)))
     }
 
+    // MARK: Play log
+
+    func setLogDirectory(_ url: URL?) {
+        if let url {
+            _ = sbj_session_set_log_dir(handle, url.path)
+        } else {
+            _ = sbj_session_set_log_dir(handle, nil)
+        }
+    }
+
+    func setGame(_ name: String) {
+        _ = sbj_session_set_game(handle, name)
+    }
+
+    func playLog() -> PlayLog {
+        guard let json = Engine.take(sbj_session_log_json(handle)) else { return .empty }
+        return (try? PlayLog.decode(json)) ?? .empty
+    }
+
+    func clearLog() {
+        _ = sbj_session_clear_log(handle)
+    }
+
     /// Plays a pad on the preview output; again stops it.
     func preview(slot: Int) throws {
         try Engine.check(sbj_session_preview_cue(handle, UInt32(slot)))

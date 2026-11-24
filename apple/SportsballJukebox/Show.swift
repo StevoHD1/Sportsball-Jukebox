@@ -158,10 +158,12 @@ struct CueDoc: Codable, Equatable {
     var fadeOut: Double?
     /// Makes the pad a playlist.
     var playlist: PlaylistDoc?
+    /// Sponsor credited when this pad plays (sponsor reports).
+    var sponsor: String?
 
     enum CodingKeys: String, CodingKey {
         case slot, title, hotkey, output, gain, loop, color, clips, markers, midi
-        case group, duck, retrigger, route, playlist
+        case group, duck, retrigger, route, playlist, sponsor
         case fadeIn = "fade_in"
         case fadeOut = "fade_out"
     }
@@ -197,6 +199,7 @@ struct CueDoc: Codable, Equatable {
         fadeIn = try c.value(.fadeIn, or: 0)
         fadeOut = try c.decodeIfPresent(Double.self, forKey: .fadeOut)
         playlist = try c.decodeIfPresent(PlaylistDoc.self, forKey: .playlist)
+        sponsor = try c.decodeIfPresent(String.self, forKey: .sponsor)
     }
 
     /// A playlist pad of the given files.
@@ -385,6 +388,7 @@ struct PreviewInfo: Decodable, Equatable {
 }
 
 struct SessionStatus: Decodable, Equatable {
+    var game: String
     var previewOutput: Int?
     var preview: PreviewInfo?
     var bank: Int
@@ -425,5 +429,46 @@ struct PreflightReport: Decodable, Equatable {
         let decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase
         return try decoder.decode(PreflightReport.self, from: Data(json.utf8))
+    }
+}
+
+// MARK: - Play log (from sbj_session_log_json)
+
+struct LogEntry: Decodable, Equatable {
+    var started: Double
+    var seconds: Double
+    var game: String
+    var show: String
+    var slot: Int
+    var bank: Int
+    var pad: Int
+    var title: String
+    var file: String
+    var sponsor: String?
+    var source: String
+    var output: String
+    var open: Bool
+
+    var startDate: Date { Date(timeIntervalSince1970: started) }
+    var fileName: String {
+        URL(fileURLWithPath: file).deletingPathExtension().lastPathComponent
+    }
+}
+
+struct LogTotal: Decodable, Equatable {
+    var name: String
+    var plays: Int
+    var seconds: Double
+}
+
+struct PlayLog: Decodable, Equatable {
+    var entries: [LogEntry]
+    var songs: [LogTotal]
+    var sponsors: [LogTotal]
+
+    static let empty = PlayLog(entries: [], songs: [], sponsors: [])
+
+    static func decode(_ json: String) throws -> PlayLog {
+        try JSONDecoder().decode(PlayLog.self, from: Data(json.utf8))
     }
 }

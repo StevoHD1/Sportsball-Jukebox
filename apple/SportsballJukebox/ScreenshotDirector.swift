@@ -74,6 +74,13 @@ struct ScreenshotDirector {
             await wait(seconds: 1.5)
             capture(sheetWindow(), "5-midi-osc")
             model.showingControls = false
+            await wait(seconds: 1)
+
+            model.setGame("vs. Tigers")
+            model.showingLog = true
+            await wait(seconds: 1.5)
+            capture(sheetWindow(), "6-game-log")
+            model.showingLog = false
             await wait(seconds: 0.5)
 
             model.stopAll()

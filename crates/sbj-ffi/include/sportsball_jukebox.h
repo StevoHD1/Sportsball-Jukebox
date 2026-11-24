@@ -103,7 +103,7 @@ SbjStatus sbj_session_device_info(const SbjSession *session, uint32_t index,
 /* The show document as JSON. Free with sbj_string_free. */
 char *sbj_session_show_json(const SbjSession *session);
 
-/* {"preview_output": number|null, "preview": {"slot","playing","position"}|null,
+/* {"game", "preview_output": number|null, "preview": {"slot","playing","position"}|null,
  *  "bank", "learning": "cue:N|stop_all|next_bank|prev_bank"|null,
  *  "last_control": string|null, "midi_inputs": [string]|null (null = MIDI off),
  *  "osc_port": number|null, "dirty", "path",
@@ -142,6 +142,19 @@ SbjStatus sbj_session_clear_midi(const SbjSession *session, const char *target);
 /* Pre-game check: {"ready", "memory_mb", "checks": [{"level":
  * "ok|info|warning|error", "message"}]}. Free with sbj_string_free. */
 char *sbj_session_preflight_json(const SbjSession *session);
+
+/* ---- Play log (licensing / sponsor reports) ------------------------- */
+
+/* Directory for daily log files (YYYY-MM-DD.jsonl, UTC); NULL = no files. */
+SbjStatus sbj_session_set_log_dir(const SbjSession *session, const char *dir);
+/* Game name stamped on new entries, e.g. "vs. Tigers". */
+SbjStatus sbj_session_set_game(const SbjSession *session, const char *name);
+/* {"entries": [{"started" (unix s), "seconds", "game", "show", "slot", "bank",
+ *  "pad", "title", "file", "sponsor", "source", "output", "open"}],
+ *  "songs": [{"name","plays","seconds"}], "sponsors": [...]}. Free it. */
+char *sbj_session_log_json(const SbjSession *session);
+/* Clears the in-memory log; files are kept. */
+SbjStatus sbj_session_clear_log(const SbjSession *session);
 
 /* ---- Cues ------------------------------------------------------------- */
 

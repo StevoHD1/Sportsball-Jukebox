@@ -534,7 +534,12 @@ pub unsafe extern "C" fn sbj_session_status_json(session: *const SbjSession) -> 
             let preview = session.preview_state().map(
                 |p| json!({"slot": p.slot, "playing": p.playing, "position": p.position_seconds}),
             );
+            let mut notices = session.take_notices();
+            if let Some(error) = session.take_log_error() {
+                notices.push(error);
+            }
             let status = json!({
+                "game": session.game(),
                 "preview_output": session.show().preview_output,
                 "preview": preview,
                 "bank": session.current_bank(),
@@ -546,7 +551,7 @@ pub unsafe extern "C" fn sbj_session_status_json(session: *const SbjSession) -> 
                 "path": session.show_path().map(|p| p.display().to_string()),
                 "outputs": outputs,
                 "problems": problems,
-                "notices": session.take_notices(),
+                "notices": notices,
             });
             Ok(status.to_string())
         })
@@ -1072,6 +1077,96 @@ cue_fn!(
 cue_fn!(
     /// Stops a cue, fading out over `fade_seconds` (0 = immediately).
     sbj_session_stop_cue(fade_seconds: f64) => |s, slot| s.stop_cue(slot, fade_seconds));
+
+// ---------------------------------------------------------------------
+// Play log
+// ---------------------------------------------------------------------
+
+/// Directory for the daily play-log files (`YYYY-MM-DD.jsonl`, UTC days);
+/// null turns file logging off.
+///
+/// # Safety
+/// `session` must be null or a live session; `dir` null or a valid string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sbj_session_set_log_dir(
+    session: *const SbjSession,
+    dir: *const c_char,
+) -> SbjStatus {
+    // SAFETY: forwarded caller contract.
+    let dir = match unsafe { read_str(dir) } {
+        Ok(d) => d.map(PathBuf::from),
+        Err(status) => return status,
+    };
+    // SAFETY: forwarded caller contract.
+    unsafe {
+        with_session(session, |s| {
+            s.lock().set_log_dir(dir);
+            SbjStatus::Ok
+        })
+    }
+}
+
+/// Names the current game; stamped on new log entries.
+///
+/// # Safety
+/// `session` must be null or a live session; `name` a valid string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sbj_session_set_game(
+    session: *const SbjSession,
+    name: *const c_char,
+) -> SbjStatus {
+    // SAFETY: forwarded caller contract.
+    let name = match unsafe { required_str(name, "name") } {
+        Ok(n) => n.to_owned(),
+        Err(status) => return status,
+    };
+    // SAFETY: forwarded caller contract.
+    unsafe {
+        with_session(session, |s| {
+            s.lock().set_game(&name);
+            SbjStatus::Ok
+        })
+    }
+}
+
+/// The play log as JSON: `{"entries": [{"started" (unix seconds),
+/// "seconds", "game", "show", "slot", "bank", "pad", "title", "file",
+/// "sponsor", "source", "output", "open"}], "songs": [{"name", "plays",
+/// "seconds"}], "sponsors": [...]}`. Free with `sbj_string_free`.
+///
+/// # Safety
+/// `session` must be null or a live session.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sbj_session_log_json(session: *const SbjSession) -> *mut c_char {
+    // SAFETY: forwarded caller contract.
+    unsafe {
+        session_string(session, |s| {
+            let session = s.lock();
+            let (songs, sponsors) = session.log_totals();
+            Ok(json!({
+                "entries": session.log_entries(),
+                "songs": songs,
+                "sponsors": sponsors,
+            })
+            .to_string())
+        })
+    }
+}
+
+/// Clears the in-memory log (log files are kept).
+///
+/// # Safety
+/// `session` must be null or a live session.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sbj_session_clear_log(session: *const SbjSession) -> SbjStatus {
+    // SAFETY: forwarded caller contract.
+    unsafe {
+        with_session(session, |s| {
+            s.lock().clear_log();
+            SbjStatus::Ok
+        })
+    }
+}
 
 /// Stops any preview.
 ///

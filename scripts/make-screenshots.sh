@@ -35,7 +35,7 @@ cat > "$demo/Demo.sbjshow" <<JSON
      "clips": [{"file": "$a/charge.wav"}]},
     {"slot": 1, "title": "Goal Horn", "hotkey": "2", "color": "orange",
      "midi": {"kind": "note", "number": 37, "channel": 10},
-     "duck": -12,
+     "duck": -12, "sponsor": "Acme Bank",
      "clips": [{"file": "$a/goal_horn.wav", "fade_out": 0.5}]},
     {"slot": 2, "title": "Walk-up: #23", "hotkey": "3", "color": "blue", "group": "Music",
      "clips": [{"file": "$a/walkup_23.wav", "fade_in": 0.05}],

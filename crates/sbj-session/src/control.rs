@@ -139,10 +139,15 @@ impl<B: AudioBackend> Session<B> {
     /// Acts on a MIDI or OSC message. Errors (e.g. firing a pad whose
     /// output is down) are reported through [`Session::last_control`].
     pub fn handle_control(&mut self, message: ControlMessage) {
+        self.log.source = match &message {
+            ControlMessage::Midi(_) => "midi",
+            ControlMessage::Osc { .. } => "osc",
+        };
         let outcome = match &message {
             ControlMessage::Midi(midi) => self.handle_midi(*midi),
             ControlMessage::Osc { address, args } => self.handle_osc(address, args),
         };
+        self.log.source = "operator";
         let source = match &message {
             ControlMessage::Midi(m) => format!("MIDI {}", m.trigger().describe()),
             ControlMessage::Osc { address, .. } => format!("OSC {address}"),

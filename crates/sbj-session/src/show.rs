@@ -276,6 +276,9 @@ pub struct CueDoc {
     /// used by playlist pads.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub playlist: Option<PlaylistDoc>,
+    /// Sponsor credited when this pad plays (for sponsor reports).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sponsor: Option<String>,
 }
 
 /// Default pad fade-out when none is set, seconds.
@@ -345,6 +348,7 @@ impl CueDoc {
             fade_in: 0.0,
             fade_out: None,
             playlist: None,
+            sponsor: None,
         }
     }
 

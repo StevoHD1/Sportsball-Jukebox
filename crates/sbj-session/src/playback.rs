@@ -60,6 +60,7 @@ impl<B: AudioBackend> Session<B> {
             live.controller
                 .set_player_gain_over(player, cue.gain * duck, fade_in)?;
         }
+        self.log_start(slot, None);
         self.after_start(slot, &cue);
         Ok(())
     }

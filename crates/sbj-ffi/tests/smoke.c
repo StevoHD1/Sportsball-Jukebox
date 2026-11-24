@@ -127,6 +127,12 @@ int main(void) {
           sbj_session_preview_cue(s, 3) == SBJ_STATUS_NO_OUTPUT);
     CHECK(sbj_session_stop_preview(s) == SBJ_STATUS_OK);
     CHECK(sbj_session_set_preview_output(s, -1) == SBJ_STATUS_OK);
+    CHECK(sbj_session_set_game(s, "Smoke vs. Test") == SBJ_STATUS_OK);
+    CHECK(sbj_session_set_log_dir(s, NULL) == SBJ_STATUS_OK);
+    char *log = sbj_session_log_json(s);
+    CHECK(log != NULL && strstr(log, "\"entries\"") != NULL);
+    sbj_string_free(log);
+    CHECK(sbj_session_clear_log(s) == SBJ_STATUS_OK);
     CHECK(sbj_session_move_cue(s, 3, 4) == SBJ_STATUS_OK);
     CHECK(sbj_session_remove_cue(s, 4) == SBJ_STATUS_OK);
     CHECK(sbj_session_set_outputs_json(s, "[{\"name\":\"Main\"},{\"name\":\"Lobby\"}]") ==
