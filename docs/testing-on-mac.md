@@ -153,6 +153,18 @@ built-in speakers or headphones)
       fade-out: right-click → Fade Out takes 3 s.
 - [ ] Show Settings → Stop All fade 2 s: Esc now takes 2 s.
 
+**Phase 6: operator awareness and preview**
+- [ ] The Now Playing panel (right side; ⇧⌘P toggles it) lists playing
+      pads, soonest to end first, with a large countdown.
+- [ ] A pad with markers shows "→ Vamp in 0:03.2"; a vamping pad shows
+      VAMP and "Press the pad to go"; a playlist shows "Up next: <song>".
+- [ ] In the last 5 seconds a pad's progress bar and its countdown turn
+      red.
+- [ ] Audio Outputs → Preview (headphones) output: choose your headphone
+      output. ⌥-click a pad: it plays only in the headphones, and the
+      panel shows a blue Preview row with a stop button. ⌥-click again
+      stops it. Groups and ducking are not affected.
+
 **Stress**
 - [ ] Leave a looping cue running for 10+ minutes. The status line should
       not start showing "glitches".

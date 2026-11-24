@@ -75,6 +75,9 @@ pub struct SbjCueState {
     /// Playlist pads: index of the song playing or last played in the
     /// playlist's items; `u32::MAX` if none / not a playlist.
     pub item: u32,
+    /// Playlist pads: the song the next press or auto-advance plays;
+    /// `u32::MAX` if none.
+    pub next_item: u32,
     pub position_seconds: f64,
     pub duration_seconds: f64,
 }
@@ -528,7 +531,12 @@ pub unsafe extern "C" fn sbj_session_status_json(session: *const SbjSession) -> 
                 .iter()
                 .map(|p| json!({"slot": p.slot, "message": p.message}))
                 .collect();
+            let preview = session.preview_state().map(
+                |p| json!({"slot": p.slot, "playing": p.playing, "position": p.position_seconds}),
+            );
             let status = json!({
+                "preview_output": session.show().preview_output,
+                "preview": preview,
                 "bank": session.current_bank(),
                 "learning": session.learning().map(target_name),
                 "last_control": session.last_control(),
@@ -1052,6 +1060,10 @@ cue_fn!(
     /// Firing an empty pad does nothing.
     sbj_session_fire_cue() => |s, slot| s.fire_cue(slot));
 cue_fn!(
+    /// Plays a pad on the preview output (e.g. headphones) without
+    /// affecting the main outputs; previewing the same pad again stops it.
+    sbj_session_preview_cue() => |s, slot| s.preview_cue(slot));
+cue_fn!(
     /// Playlist pad: crossfade to the next song (or start, if stopped).
     sbj_session_skip_cue() => |s, slot| s.skip_cue(slot));
 cue_fn!(
@@ -1060,6 +1072,40 @@ cue_fn!(
 cue_fn!(
     /// Stops a cue, fading out over `fade_seconds` (0 = immediately).
     sbj_session_stop_cue(fade_seconds: f64) => |s, slot| s.stop_cue(slot, fade_seconds));
+
+/// Stops any preview.
+///
+/// # Safety
+/// `session` must be null or a live session.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sbj_session_stop_preview(session: *const SbjSession) -> SbjStatus {
+    // SAFETY: forwarded caller contract.
+    unsafe {
+        with_session(session, |s| {
+            s.lock().stop_preview();
+            SbjStatus::Ok
+        })
+    }
+}
+
+/// Chooses the output (index) used for previews; negative turns preview
+/// off.
+///
+/// # Safety
+/// `session` must be null or a live session.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sbj_session_set_preview_output(
+    session: *const SbjSession,
+    output: i32,
+) -> SbjStatus {
+    let output = u32::try_from(output).ok();
+    // SAFETY: forwarded caller contract.
+    unsafe {
+        with_session(session, |s| {
+            session_status(s.lock().set_preview_output(output))
+        })
+    }
+}
 
 /// Stops every cue on every output, fading out over `fade_seconds`.
 ///
@@ -1121,6 +1167,7 @@ pub unsafe extern "C" fn sbj_session_cue_states(
                     ready: st.ready,
                     holding: st.holding,
                     item: st.item.unwrap_or(u32::MAX),
+                    next_item: st.next_item.unwrap_or(u32::MAX),
                     position_seconds: st.position_seconds,
                     duration_seconds: st.duration_seconds,
                 };

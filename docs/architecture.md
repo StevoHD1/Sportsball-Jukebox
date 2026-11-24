@@ -1,6 +1,6 @@
 # Sportsball Jukebox: Architecture
 
-Status: Phase 5 (playlists and fades). Last updated 2026-11-24.
+Status: Phase 6 (operator awareness and preview). Last updated 2026-11-24.
 
 ## Goals, in priority order
 
@@ -324,6 +324,16 @@ setting says so. Shuffle never repeats a song across a reshuffle. A
 playlist pad counts as playing while either of its players is, and the
 cue state reports the current item for the UI.
 
+**Preview.** The show's `preview_output` names an output (e.g. the
+operator's headphones) for auditioning. `Session::preview_cue` plays a pad
+there on a reserved player, `2 × MAX_SLOTS`, so each output runs
+`2 × MAX_SLOTS + 1` players. It never touches the pad's own players, its
+exclusive group or ducking, so the crowd hears nothing different.
+Previewing the same pad again stops it. Playlist pads preview the song
+they would play next, and the cue state reports that song (`next_item`).
+To make "up next" always known, a shuffled playlist reshuffles as soon as
+it reaches its end, not on the next press.
+
 **Routing.** A cue's `route` (`first`, `count`, 1-based) sends it to
 specific output channels (e.g. 3–4 of an 8-channel interface). Mono
 sources feed every routed channel; multichannel sources map channel by
@@ -433,7 +443,15 @@ CI.
   `/sbj/next/<pad>`. Dropping several files on a pad makes one.
 - Per-pad fade-in on fire and fade-out length; show-wide Stop All fade.
 
+**Phase 6: Operator awareness and preview (built; awaiting Mac testing)**
+- Now Playing panel: everything playing, soonest to end first, with a
+  large countdown, the next marker or playlist song, and stop and fade
+  buttons.
+- Pads turn red in their last 5 seconds.
+- Headphone preview: ⌥-click a pad (or Preview in its menu or editor) to
+  hear it on the preview output only.
+
 **Next candidates**
-- Countdown / "time left" display for the operator (next song, end of
-  vamp), and a hold-to-preview (cue) output for headphones.
+- Recording a game log (what fired when) for sponsor or licensing
+  reports.
 - Signed releases once there is a Developer account.

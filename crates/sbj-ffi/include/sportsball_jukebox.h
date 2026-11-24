@@ -57,6 +57,7 @@ typedef struct SbjCueState {
     bool ready;     /* loaded on an open output: can fire */
     bool holding;   /* vamping: firing again lets it continue */
     uint32_t item;  /* playlist pads: current song index, UINT32_MAX if none */
+    uint32_t next_item; /* playlist pads: song played next, UINT32_MAX if none */
     double position_seconds;
     double duration_seconds;
 } SbjCueState;
@@ -102,7 +103,8 @@ SbjStatus sbj_session_device_info(const SbjSession *session, uint32_t index,
 /* The show document as JSON. Free with sbj_string_free. */
 char *sbj_session_show_json(const SbjSession *session);
 
-/* {"bank", "learning": "cue:N|stop_all|next_bank|prev_bank"|null,
+/* {"preview_output": number|null, "preview": {"slot","playing","position"}|null,
+ *  "bank", "learning": "cue:N|stop_all|next_bank|prev_bank"|null,
  *  "last_control": string|null, "midi_inputs": [string]|null (null = MIDI off),
  *  "osc_port": number|null, "dirty", "path",
  *  "outputs": [{"name","status":"running|on_backup|offline",
@@ -162,6 +164,12 @@ SbjStatus sbj_session_waveform(const SbjSession *session, const char *file,
  * or applies its retrigger setting. Handles exclusive groups and ducking.
  * Empty pad: no-op. */
 SbjStatus sbj_session_fire_cue(const SbjSession *session, uint32_t slot);
+/* Preview (audition) a pad on the preview output, e.g. headphones, without
+ * affecting the main outputs. Previewing the same pad again stops it. */
+SbjStatus sbj_session_preview_cue(const SbjSession *session, uint32_t slot);
+SbjStatus sbj_session_stop_preview(const SbjSession *session);
+/* Output index used for previews; negative = preview off. */
+SbjStatus sbj_session_set_preview_output(const SbjSession *session, int32_t output);
 /* Playlist pad: crossfade to the next song (or start it). */
 SbjStatus sbj_session_skip_cue(const SbjSession *session, uint32_t slot);
 SbjStatus sbj_session_play_cue_from(const SbjSession *session, uint32_t slot, double seconds);

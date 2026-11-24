@@ -12,9 +12,15 @@ struct ContentView: View {
             if model.show.banks.count > 1 {
                 BankBar()
             }
-            ScrollView {
-                PadGrid()
-                    .padding(16)
+            HStack(spacing: 0) {
+                ScrollView {
+                    PadGrid()
+                        .padding(16)
+                }
+                if model.showingNowPlaying {
+                    Divider()
+                    NowPlayingView()
+                }
             }
             Divider()
             ControlFooter()
@@ -87,6 +93,13 @@ private struct HeaderBar: View {
             }
 
             Spacer()
+
+            Button {
+                model.showingNowPlaying.toggle()
+            } label: {
+                Label("Now Playing", systemImage: "sidebar.right")
+            }
+            .help("Show or hide the Now Playing panel")
 
             Button {
                 model.runPreflight()

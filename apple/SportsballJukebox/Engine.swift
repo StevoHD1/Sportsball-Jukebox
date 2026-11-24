@@ -70,6 +70,14 @@ struct CueStatus: Equatable, Sendable {
     var holding = false
     /// Playlist pads: index of the current song in the playlist.
     var item: Int?
+    /// Playlist pads: the song that plays next.
+    var nextItem: Int?
+
+    /// Seconds left, if counting down makes sense (not looping or vamping).
+    var remaining: Double? {
+        guard playing, !holding, !looping, duration > 0 else { return nil }
+        return max(duration - position, 0)
+    }
     var position: Double = 0
     var duration: Double = 0
 
@@ -237,6 +245,19 @@ final class EngineSession: @unchecked Sendable {
         try Engine.check(sbj_session_fire_cue(handle, UInt32(slot)))
     }
 
+    /// Plays a pad on the preview output; again stops it.
+    func preview(slot: Int) throws {
+        try Engine.check(sbj_session_preview_cue(handle, UInt32(slot)))
+    }
+
+    func stopPreview() {
+        _ = sbj_session_stop_preview(handle)
+    }
+
+    func setPreviewOutput(_ output: Int?) throws {
+        try Engine.check(sbj_session_set_preview_output(handle, Int32(output ?? -1)))
+    }
+
     /// Playlist pad: crossfade to the next song.
     func skip(slot: Int) throws {
         try Engine.check(sbj_session_skip_cue(handle, UInt32(slot)))
@@ -272,6 +293,7 @@ final class EngineSession: @unchecked Sendable {
                 ready: $0.ready,
                 holding: $0.holding,
                 item: $0.item == UInt32.max ? nil : Int($0.item),
+                nextItem: $0.next_item == UInt32.max ? nil : Int($0.next_item),
                 position: $0.position_seconds,
                 duration: $0.duration_seconds
             )

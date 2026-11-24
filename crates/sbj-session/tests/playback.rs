@@ -305,3 +305,86 @@ fn fade_in_on_fire_and_pad_fade_out_length() {
     assert!((out[480] - 0.5).abs() < 0.01, "{}", out[480]);
     assert!(out[960..].iter().all(|&x| x == 0.0));
 }
+
+// ---------------------------------------------------------------------
+// Preview and "up next"
+// ---------------------------------------------------------------------
+
+#[test]
+fn preview_plays_only_on_the_preview_output() {
+    let backend = two_devices();
+    let mut s = session(&backend);
+    s.set_outputs(vec![
+        sbj_session::OutputDoc::named("Arena"),
+        sbj_session::OutputDoc {
+            name: "Headphones".into(),
+            device: Some(sbj_session::DeviceRef {
+                id: B.into(),
+                name: String::new(),
+            }),
+            backup: None,
+        },
+    ])
+    .unwrap();
+    s.add_sound("a".into(), constant(0.5, 48_000));
+    s.add_sound("m".into(), constant(0.25, 480_000));
+    s.set_cue(cue(0, "a")).unwrap();
+    let mut music = cue(1, "m");
+    music.group = Some("x".into());
+    s.set_cue(music).unwrap();
+    let mut a = s.show().cue(0).unwrap().clone();
+    a.group = Some("x".into());
+    a.duck = Some(-20.0);
+    s.set_cue(a).unwrap();
+
+    assert!(s.preview_cue(0).is_err(), "no preview output yet");
+    s.set_preview_output(Some(1)).unwrap();
+
+    s.fire_cue(1).unwrap(); // music on the arena
+    pull(&mut s, 0, 100);
+    s.preview_cue(0).unwrap();
+    s.poll();
+    let arena = pull(&mut s, 0, 20_000);
+    // Device B is 44.1 kHz: skip the resampler's first few samples.
+    let phones = &pull(&mut s, 1, 200)[32..];
+    // Arena: music untouched (no group fade, no duck).
+    assert!(arena.iter().all(|&x| (x - 0.25).abs() < 1e-6));
+    assert!(
+        phones.iter().all(|&x| (x - 0.5).abs() < 0.01),
+        "{}",
+        phones[50]
+    );
+    assert!(
+        !s.cue_state(0).unwrap().playing,
+        "the pad itself is not playing"
+    );
+    let p = s.preview_state().unwrap();
+    assert!(p.playing && p.slot == 0);
+
+    s.preview_cue(0).unwrap(); // toggle off
+    pull(&mut s, 1, 1000);
+    assert!(!s.preview_state().is_some_and(|p| p.playing));
+    assert!(s.show().preview_output == Some(1));
+    s.set_outputs(vec![sbj_session::OutputDoc::named("Arena")])
+        .unwrap();
+    assert_eq!(s.show().preview_output, None, "removed with its output");
+}
+
+#[test]
+fn playlist_reports_up_next_even_across_a_reshuffle() {
+    let mut s = playlist_session(false, true);
+    for _ in 0..9 {
+        s.skip_cue(0).unwrap();
+        pull(&mut s, 0, 10);
+        let st = s.cue_state(0).unwrap();
+        let next = st.next_item.expect("next is always known");
+        assert_ne!(Some(next), st.item, "never the same song twice");
+        s.skip_cue(0).unwrap();
+        pull(&mut s, 0, 10);
+        assert_eq!(
+            s.cue_state(0).unwrap().item,
+            Some(next),
+            "next really is next"
+        );
+    }
+}

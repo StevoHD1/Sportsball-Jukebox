@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// Pad colours, by the names stored in the show file.
@@ -44,7 +45,12 @@ struct CueButton: View {
 
     var body: some View {
         Button {
-            model.trigger(slot)
+            // Option-click previews in the headphones instead.
+            if NSEvent.modifierFlags.contains(.option), cue != nil {
+                model.preview(slot)
+            } else {
+                model.trigger(slot)
+            }
         } label: {
             PadFace(
                 cue: cue,
@@ -114,6 +120,8 @@ struct CueButton: View {
     private var menu: some View {
         if let cue {
             Button("Edit Pad…") { model.editing = EditTarget(id: slot) }
+            Button("Preview in Headphones (⌥-click)") { model.preview(slot) }
+                .disabled(!model.canPreview)
             if cue.playlist != nil {
                 Button("Next Song") { model.skip(slot) }
             }
@@ -154,7 +162,7 @@ private struct PadFace: View {
 
             GeometryReader { geometry in
                 Rectangle()
-                    .fill(Color.white.opacity(0.22))
+                    .fill(isEnding ? Color.red.opacity(0.55) : Color.white.opacity(0.22))
                     .frame(width: geometry.size.width * state.progress)
             }
             .clipShape(shape)
@@ -229,6 +237,13 @@ private struct PadFace: View {
                 ProgressView().controlSize(.small)
             }
         }
+    }
+
+    /// In its last 5 seconds (and not about to loop or carry on).
+    private var isEnding: Bool {
+        guard let remaining = state.remaining else { return false }
+        if cue?.playlist?.autoAdvance == true { return false }
+        return remaining <= 5
     }
 
     /// "♫ 3/12 · Song name" for playlist pads.

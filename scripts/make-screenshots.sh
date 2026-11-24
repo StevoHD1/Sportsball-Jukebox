@@ -22,6 +22,7 @@ cat > "$demo/Demo.sbjshow" <<JSON
   "slots": 24,
   "columns": 6,
   "banks": ["Pregame", "Game", "Postgame"],
+  "preview_output": 1,
   "outputs": [
     {"name": "Arena", "backup": {"id": "unknown", "name": "Null Audio Device"}},
     {"name": "Concourse", "device": {"id": "unknown", "name": "Null Audio Device"}}

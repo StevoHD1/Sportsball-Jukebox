@@ -26,11 +26,14 @@ struct ShowDoc: Codable, Equatable {
     var groupFade: Double = 1.0
     /// Seconds Stop All takes to fade everything out.
     var stopAllFade: Double = 0.5
+    /// Output index used for previewing pads (e.g. headphones).
+    var previewOutput: Int?
 
     enum CodingKeys: String, CodingKey {
         case format, version, name, slots, columns, banks, outputs, cues, controls
         case groupFade = "group_fade"
         case stopAllFade = "stop_all_fade"
+        case previewOutput = "preview_output"
     }
 
     /// Global slot numbers of a bank's pads.
@@ -52,6 +55,7 @@ struct ShowDoc: Codable, Equatable {
         controls = try c.value(.controls, or: controls)
         groupFade = try c.value(.groupFade, or: groupFade)
         stopAllFade = try c.value(.stopAllFade, or: stopAllFade)
+        previewOutput = try c.decodeIfPresent(Int.self, forKey: .previewOutput)
         outputs = try c.value(.outputs, or: outputs)
         cues = try c.value(.cues, or: cues)
     }
@@ -374,7 +378,15 @@ struct CueProblem: Decodable, Equatable {
     var message: String
 }
 
+struct PreviewInfo: Decodable, Equatable {
+    var slot: Int
+    var playing: Bool
+    var position: Double
+}
+
 struct SessionStatus: Decodable, Equatable {
+    var previewOutput: Int?
+    var preview: PreviewInfo?
     var bank: Int
     /// "cue:<slot>", "stop_all", "next_bank", "prev_bank" or nil.
     var learning: String?

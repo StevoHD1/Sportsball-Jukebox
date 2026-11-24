@@ -2,6 +2,13 @@ import AppKit
 import Foundation
 import UniformTypeIdentifiers
 
+struct NowPlayingItem: Identifiable {
+    let cue: CueDoc
+    let state: CueStatus
+
+    var id: Int { cue.slot }
+}
+
 struct AlertMessage: Identifiable {
     let id = UUID()
     let title: String
@@ -39,6 +46,9 @@ final class AppModel: ObservableObject {
     @Published var showingSettings = false
     @Published var showingControls = false
     @Published var showingPreflight = false
+    @Published var showingNowPlaying: Bool = UserDefaults.standard.object(forKey: "showNowPlaying") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(showingNowPlaying, forKey: "showNowPlaying") }
+    }
     @Published private(set) var preflight: PreflightReport?
     @Published var midiEnabled: Bool = UserDefaults.standard.object(forKey: "midiEnabled") as? Bool ?? true {
         didSet {
@@ -400,6 +410,41 @@ final class AppModel: ObservableObject {
             cue.hotkey = freeHotkey(preferring: slot)
         }
         updateCue(cue)
+    }
+
+    // MARK: - Preview
+
+    var canPreview: Bool { show.previewOutput != nil }
+
+    /// Plays a pad on the preview output (e.g. headphones); again stops it.
+    func preview(_ slot: Int) {
+        guard canPreview else {
+            alert = AlertMessage(
+                title: "No preview output",
+                message: "Choose a preview output (for example headphones) in Audio Outputs."
+            )
+            return
+        }
+        report { try session.preview(slot: slot) }
+        refreshStatus()
+    }
+
+    func stopPreview() {
+        session.stopPreview()
+        refreshStatus()
+    }
+
+    func setPreviewOutput(_ output: Int?) {
+        report { try session.setPreviewOutput(output) }
+        refreshShow()
+    }
+
+    /// Pads playing now, soonest to end first (countdown-less ones last).
+    var nowPlaying: [NowPlayingItem] {
+        show.cues
+            .map { NowPlayingItem(cue: $0, state: state(of: $0.slot)) }
+            .filter { $0.state.playing }
+            .sorted { ($0.state.remaining ?? .infinity) < ($1.state.remaining ?? .infinity) }
     }
 
     /// Playlist pad: crossfade to the next song.

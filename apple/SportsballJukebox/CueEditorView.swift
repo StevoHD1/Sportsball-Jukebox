@@ -104,6 +104,14 @@ struct CueEditorView: View {
                 }
             }
             Spacer()
+            Button {
+                apply()
+                model.preview(slot)
+            } label: {
+                Label("Preview", systemImage: "headphones")
+            }
+            .disabled(!model.canPreview)
+            .help("Hear this pad on the preview output only")
             Button("Cancel") { dismiss() }
                 .keyboardShortcut(.cancelAction)
             Button("Done") {

@@ -29,6 +29,10 @@ struct SportsballJukeboxApp: App {
                 Button("MIDI & OSC…") { model.showingControls = true }
                     .keyboardShortcut("m", modifiers: [.command, .shift])
                 Button("Show Settings…") { model.showingSettings = true }
+                Button(model.showingNowPlaying ? "Hide Now Playing" : "Show Now Playing") {
+                    model.showingNowPlaying.toggle()
+                }
+                .keyboardShortcut("p", modifiers: [.command, .shift])
                 Button("Pre-game Check…") {
                     model.runPreflight()
                     model.showingPreflight = true

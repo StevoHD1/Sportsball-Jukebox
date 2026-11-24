@@ -81,20 +81,27 @@ impl PlaylistState {
         }
     }
 
-    /// Takes the next item, wrapping (and reshuffling if shuffled).
+    /// Takes the next item. At the end of the list it wraps, reshuffling
+    /// straight away if shuffled, so the item after this one is always
+    /// known (for "up next" displays).
     fn take_next(&mut self, shuffle: bool) -> Option<usize> {
         if self.order.is_empty() {
             return None;
         }
+        let item = self.order[self.next.min(self.order.len() - 1)];
+        self.next += 1;
         if self.next >= self.order.len() {
             self.next = 0;
             if shuffle {
-                self.shuffle(self.current);
+                self.shuffle(Some(item));
             }
         }
-        let item = self.order[self.next];
-        self.next += 1;
         Some(item)
+    }
+
+    /// The item the next press (or auto-advance) will play.
+    pub(crate) fn peek_next(&self) -> Option<usize> {
+        self.order.get(self.next).copied()
     }
 
     pub(crate) fn active(&self, slot: u32) -> PlayerId {

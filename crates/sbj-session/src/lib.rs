@@ -32,6 +32,9 @@ use sbj_media::MediaError;
 pub mod control;
 mod playback;
 mod playlist;
+mod preview;
+
+pub use preview::PreviewState;
 mod preflight;
 
 pub use control::{ControlMessage, LearnTarget, MidiMessage};
@@ -241,6 +244,8 @@ pub struct CueState {
     /// Playlist pads: index (in the playlist's items) of the song playing
     /// or last played.
     pub item: Option<u32>,
+    /// Playlist pads: the item the next press or auto-advance will play.
+    pub next_item: Option<u32>,
     pub position_seconds: f64,
     pub duration_seconds: f64,
 }
@@ -328,6 +333,8 @@ pub struct Session<B: AudioBackend> {
     /// the audio thread has started it.
     recent_fires: HashMap<u32, Instant>,
     playlists: HashMap<u32, playlist::PlaylistState>,
+    /// The pad being previewed, and on which output.
+    previewing: Option<(u32, usize)>,
 }
 
 impl<B: AudioBackend> Session<B> {
@@ -354,6 +361,7 @@ impl<B: AudioBackend> Session<B> {
             duck_applied: HashMap::new(),
             recent_fires: HashMap::new(),
             playlists: HashMap::new(),
+            previewing: None,
         }
     }
 
@@ -587,6 +595,14 @@ impl<B: AudioBackend> Session<B> {
         }
         let old = std::mem::replace(&mut self.show.outputs, outputs);
         let count = self.show.outputs.len();
+        if self
+            .show
+            .preview_output
+            .is_some_and(|p| p as usize >= count)
+        {
+            self.show.preview_output = None;
+            self.previewing = None;
+        }
         for cue in &mut self.show.cues {
             if cue.output as usize >= count {
                 cue.output = 0;
@@ -661,7 +677,8 @@ impl<B: AudioBackend> Session<B> {
             engine.declick_frames = seconds_to_samples(seconds, config.sample_rate) as u32;
         }
         // Two players per pad: playlists crossfade between them.
-        engine.players = MAX_SLOTS * 2;
+        // plus one for previewing.
+        engine.players = MAX_SLOTS * 2 + 1;
         let (mut controller, mut renderer) = Engine::create(engine)?;
         controller.set_master_gain(self.master_gain)?;
         let stream = self.backend.open_output(
@@ -680,6 +697,9 @@ impl<B: AudioBackend> Session<B> {
     /// (Re)opens one output on the best available device and loads its
     /// cues. Returns whether a device was opened.
     fn open_output(&mut self, index: usize) -> bool {
+        if self.previewing.is_some_and(|(_, o)| o == index) {
+            self.previewing = None;
+        }
         self.outputs[index] = OutputRuntime::default();
         self.loaded.retain(|_, l| l.output != index);
 
@@ -801,25 +821,14 @@ impl<B: AudioBackend> Session<B> {
             self.load_playlist(slot, &cue);
             return;
         }
-        let Some(live) = self.outputs[index].live.as_mut() else {
+        let Some(rate) = self.outputs[index]
+            .live
+            .as_ref()
+            .map(|l| l.config.sample_rate)
+        else {
             return;
         };
-        let rate = live.config.sample_rate;
-
-        let mut audio = HashMap::new();
-        for clip in &cue.clips {
-            if let Some(sound) = self.library.get_mut(&clip.file) {
-                match sound.at_rate(rate) {
-                    Ok(buffer) => {
-                        audio.insert(clip.file.clone(), buffer);
-                    }
-                    Err(e) => self.problems.push(CueProblem {
-                        slot,
-                        message: e.to_string(),
-                    }),
-                }
-            }
-        }
+        let audio = self.audio_at_rate(&cue, rate);
         let (timeline, problems) = show::cue_timeline(&cue, rate, &audio);
         for mut problem in problems {
             // Say why a file is missing when we know.
@@ -832,6 +841,9 @@ impl<B: AudioBackend> Session<B> {
         }
         let length_seconds = samples_to_seconds(timeline.length(), rate);
         let player = PlayerId(slot);
+        let Some(live) = self.outputs[index].live.as_mut() else {
+            return;
+        };
         let channels = live.config.channels;
         let (first, count) = match cue.route {
             None => (0, 0),
@@ -871,6 +883,25 @@ impl<B: AudioBackend> Session<B> {
                 message: e.to_string(),
             }),
         }
+    }
+
+    /// The cue's clip audio converted to `rate`; failures become problems.
+    fn audio_at_rate(&mut self, cue: &CueDoc, rate: u32) -> HashMap<String, Arc<AudioBuffer>> {
+        let mut audio = HashMap::new();
+        for clip in &cue.clips {
+            if let Some(sound) = self.library.get_mut(&clip.file) {
+                match sound.at_rate(rate) {
+                    Ok(buffer) => {
+                        audio.insert(clip.file.clone(), buffer);
+                    }
+                    Err(e) => self.problems.push(CueProblem {
+                        slot: cue.slot,
+                        message: e.to_string(),
+                    }),
+                }
+            }
+        }
+        audio
     }
 
     /// Adds or replaces the cue in `cue.slot` and loads it. Any audio it
@@ -1029,6 +1060,7 @@ impl<B: AudioBackend> Session<B> {
             let player = playlist.map_or(PlayerId(slot), |p| p.active(slot));
             state.ready = true;
             state.item = playlist.and_then(|p| p.current).map(|i| i as u32);
+            state.next_item = playlist.and_then(|p| p.peek_next()).map(|i| i as u32);
             // A playlist pad is playing while either of its players is
             // (during a crossfade, or just before the new song starts).
             state.playing = live.controller.is_playing(player)

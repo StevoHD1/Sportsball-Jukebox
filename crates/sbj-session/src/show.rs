@@ -103,6 +103,10 @@ pub struct Show {
         skip_serializing_if = "is_default_stop_all_fade"
     )]
     pub stop_all_fade: f64,
+    /// Output used to preview (audition) pads, e.g. headphones; `None` =
+    /// preview off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preview_output: Option<u32>,
 }
 
 fn default_stop_all_fade() -> f64 {
@@ -183,6 +187,7 @@ impl Default for Show {
             controls: ControlsDoc::default(),
             group_fade: default_group_fade(),
             stop_all_fade: default_stop_all_fade(),
+            preview_output: None,
         }
     }
 }

@@ -48,6 +48,20 @@ struct OutputsView: View {
             .frame(minHeight: 200)
 
             HStack {
+                Text("Preview (headphones) output")
+                Picker("", selection: previewOutput) {
+                    Text("Off").tag(-1)
+                    ForEach(Array(model.show.outputs.enumerated()), id: \.offset) { index, output in
+                        Text(output.name).tag(index)
+                    }
+                }
+                .frame(width: 200)
+                Text("⌥-click a pad to hear it there only.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            HStack {
                 Button {
                     rows.append(Row(doc: OutputDoc(name: "Output \(rows.count + 1)")))
                 } label: {
@@ -70,6 +84,14 @@ struct OutputsView: View {
             model.refreshDevices()
             rows = model.show.outputs.map { Row(doc: $0) }
         }
+    }
+
+    /// Applies immediately (preview is not part of the output list edits).
+    private var previewOutput: Binding<Int> {
+        Binding(
+            get: { model.show.previewOutput ?? -1 },
+            set: { model.setPreviewOutput($0 < 0 ? nil : $0) }
+        )
     }
 
     /// Live status for a row that already exists in the show.
