@@ -45,7 +45,6 @@ targets:
           - -framework CoreAudio
           - -framework CoreFoundation
           - -framework Foundation
-          - -lobjc
           - -liconv
         # No Apple Developer account yet: ad-hoc sign (required to run on
         # Apple Silicon), no sandbox, no hardened runtime.
