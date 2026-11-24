@@ -206,6 +206,19 @@ built-in speakers or headphones)
 - [ ] Drag the target pad to another spot in the grid: the marker still
       fires it. Game Log lists those plays with the source "marker".
 
+**Phase 10: level matching and silence**
+- [ ] Drop a file that has silence at the start on a pad: it fires with
+      no gap. The editor's clip row shows its loudness and peak.
+- [ ] Show Settings → Level-match pads at -16 LUFS. Fire a quiet song and
+      a loud one: they sound about equally loud. The clip row shows
+      "→ plays +x dB".
+- [ ] Turn Level-match off for one pad in its editor: it plays at its own
+      level again.
+- [ ] A playlist of songs from different sources: each song plays at a
+      similar level.
+- [ ] Trim Silence on a file with silence at the end: the pad ends (and a
+      loop wraps) without a gap.
+
 **Stress**
 - [ ] Leave a looping cue running for 10+ minutes. The status line should
       not start showing "glitches".

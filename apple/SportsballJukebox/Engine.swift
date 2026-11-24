@@ -157,17 +157,37 @@ final class EngineSession: @unchecked Sendable {
     }
 
     func setShowSettings(
-        name: String, slots: Int, columns: Int, banks: [String], stopAllFade: Double
+        name: String, slots: Int, columns: Int, banks: [String], stopAllFade: Double,
+        levelMatch: Double?
     ) throws {
         struct Settings: Encodable {
             let name: String
             let slots: Int
             let columns: Int
             let banks: [String]
-            let stop_all_fade: Double
+            let stopAllFade: Double
+            /// Always written: null turns level matching off.
+            let levelMatch: Double?
+
+            enum CodingKeys: String, CodingKey {
+                case name, slots, columns, banks
+                case stopAllFade = "stop_all_fade"
+                case levelMatch = "level_match"
+            }
+
+            func encode(to encoder: Encoder) throws {
+                var c = encoder.container(keyedBy: CodingKeys.self)
+                try c.encode(name, forKey: .name)
+                try c.encode(slots, forKey: .slots)
+                try c.encode(columns, forKey: .columns)
+                try c.encode(banks, forKey: .banks)
+                try c.encode(stopAllFade, forKey: .stopAllFade)
+                try c.encode(levelMatch, forKey: .levelMatch)
+            }
         }
         let json = try ShowDoc.encode(Settings(
-            name: name, slots: slots, columns: columns, banks: banks, stop_all_fade: stopAllFade
+            name: name, slots: slots, columns: columns, banks: banks, stopAllFade: stopAllFade,
+            levelMatch: levelMatch
         ))
         try Engine.check(sbj_session_set_show_settings_json(handle, json))
     }
@@ -236,6 +256,14 @@ final class EngineSession: @unchecked Sendable {
         var duration = 0.0
         try Engine.check(sbj_session_load_sound(handle, file, &duration))
         return duration
+    }
+
+    /// Loudness, peak and silence of a loaded file (after `loadSound`).
+    func soundInfo(file: String) -> SoundInfo? {
+        guard let json = Engine.take(sbj_session_sound_info_json(handle, file)) else {
+            return nil
+        }
+        return SoundInfo.decode(json)
     }
 
     /// (min, max) pairs across the whole file.

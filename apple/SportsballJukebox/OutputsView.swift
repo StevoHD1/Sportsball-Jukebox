@@ -209,6 +209,8 @@ struct ShowSettingsView: View {
     @State private var columns = 6
     @State private var banks: [Bank] = []
     @State private var stopAllFade = 0.5
+    @State private var levelMatchOn = false
+    @State private var levelTarget = -16.0
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -224,6 +226,25 @@ struct ShowSettingsView: View {
                         .frame(width: 60)
                     Text("seconds").foregroundStyle(.secondary)
                 }
+                Toggle("Level-match pads", isOn: $levelMatchOn)
+                    .help("Play every pad and playlist song at the same loudness")
+                if levelMatchOn {
+                    Picker("Target", selection: $levelTarget) {
+                        Text("-23 LUFS (broadcast, quiet)").tag(-23.0)
+                        Text("-18 LUFS").tag(-18.0)
+                        Text("-16 LUFS (recommended)").tag(-16.0)
+                        Text("-14 LUFS (streaming, loud)").tag(-14.0)
+                        if ![-23.0, -18.0, -16.0, -14.0].contains(levelTarget) {
+                            Text(String(format: "%.1f LUFS (from the show file)", levelTarget)).tag(levelTarget)
+                        }
+                    }
+                }
+            }
+            if levelMatchOn {
+                Text("Each file is measured when loaded and turned up or down to the target, so a quiet walk-up and a loud horn play at the same level. Quiet files are boosted by at most 12 dB and never past -1 dBFS. A pad can opt out in its editor. Changing this stops playing pads.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             Text("Banks").font(.headline)
             Text("Each bank is a page of pads. Switch with ⌘1–⌘9, the bank tabs, MIDI or OSC.")
@@ -260,7 +281,8 @@ struct ShowSettingsView: View {
                         slots: slots,
                         columns: columns,
                         banks: banks.map(\.name),
-                        stopAllFade: stopAllFade
+                        stopAllFade: stopAllFade,
+                        levelMatch: levelMatchOn ? levelTarget : nil
                     )
                     dismiss()
                 }
@@ -276,6 +298,10 @@ struct ShowSettingsView: View {
             columns = model.show.columns
             banks = model.show.banks.map { Bank(name: $0) }
             stopAllFade = model.show.stopAllFade
+            levelMatchOn = model.show.levelMatch != nil
+            if let target = model.show.levelMatch {
+                levelTarget = target
+            }
         }
     }
 }

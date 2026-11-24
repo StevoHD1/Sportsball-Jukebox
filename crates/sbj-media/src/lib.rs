@@ -7,6 +7,9 @@
 //!
 //! Supported: WAV, AIFF, CAF, FLAC, MP3, AAC/M4A, ALAC, Ogg Vorbis.
 
+pub mod analysis;
+pub use analysis::{Analysis, analyze};
+
 use std::fmt;
 use std::fs::File;
 use std::io::Cursor;

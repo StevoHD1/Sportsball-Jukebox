@@ -119,7 +119,8 @@ SbjStatus sbj_session_open_show(const SbjSession *session, const char *path);
 /* path NULL = the show's current file. Writes atomically. */
 SbjStatus sbj_session_save_show(const SbjSession *session, const char *path);
 /* {"name", "slots" (pads per bank), "columns", "banks": [names],
- *  "stop_all_fade"?: seconds}.
+ *  "stop_all_fade"?: seconds, "level_match"?: LUFS|null (null = off;
+ *  absent = unchanged; changing it reloads, and so stops, every pad)}.
  * Cue slots are bank * slots + pad; resizing keeps each cue's bank/pad. */
 SbjStatus sbj_session_set_show_settings_json(const SbjSession *session, const char *json);
 /* The visible bank (0-based): hotkeys and OSC pad numbers refer to it. */
@@ -168,6 +169,12 @@ SbjStatus sbj_session_remove_cue(const SbjSession *session, uint32_t slot);
 /* Swaps with whatever is in `to`. */
 SbjStatus sbj_session_move_cue(const SbjSession *session, uint32_t slot, uint32_t to);
 
+/* After sbj_session_load_sound: {"duration", "loudness": LUFS|null,
+ * "peak_db": dBFS|null, "lead_silence", "tail_silence" (seconds),
+ * "level_gain_db": dB|null (what level matching applies; null if off)},
+ * or "null" if the file is not loaded. NULL on error.
+ * Free with sbj_string_free. */
+char *sbj_session_sound_info_json(const SbjSession *session, const char *file);
 /* SLOW: decodes a file for display before use. duration_out may be NULL. */
 SbjStatus sbj_session_load_sound(const SbjSession *session, const char *file,
                                  double *duration_out);

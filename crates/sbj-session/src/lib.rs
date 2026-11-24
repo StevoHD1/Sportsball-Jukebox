@@ -112,6 +112,7 @@ pub type Result<T> = std::result::Result<T, SessionError>;
 pub struct Sound {
     original: Arc<AudioBuffer>,
     by_rate: HashMap<u32, Arc<AudioBuffer>>,
+    analysis: sbj_media::Analysis,
 }
 
 impl Sound {
@@ -122,9 +123,11 @@ impl Sound {
     }
 
     pub fn from_buffer(buffer: AudioBuffer, rates: &[u32]) -> Result<Self> {
+        let analysis = sbj_media::analyze(&buffer);
         let mut sound = Self {
             original: Arc::new(buffer),
             by_rate: HashMap::new(),
+            analysis,
         };
         for &rate in rates {
             sound.at_rate(rate)?;
@@ -151,6 +154,11 @@ impl Sound {
 
     pub fn original(&self) -> &Arc<AudioBuffer> {
         &self.original
+    }
+
+    /// Loudness, peak and silence, measured when the sound was decoded.
+    pub fn analysis(&self) -> &sbj_media::Analysis {
+        &self.analysis
     }
 
     /// The audio at `rate`, converting (slow) the first time.
@@ -577,6 +585,11 @@ impl<B: AudioBackend> Session<B> {
         self.library.get(file).map(|s| Arc::clone(s.original()))
     }
 
+    /// A decoded sound, if loaded.
+    pub fn sound(&self, file: &str) -> Option<&Sound> {
+        self.library.get(file)
+    }
+
     // ---- Outputs ------------------------------------------------------
 
     /// Opens every output's device and loads its cues.
@@ -842,8 +855,13 @@ impl<B: AudioBackend> Session<B> {
             return;
         };
         let audio = self.audio_at_rate(&cue, rate);
-        let (timeline, problems) =
-            show::cue_timeline(&cue, rate, &audio, &|pad| self.pad_target(&cue, pad));
+        let (timeline, problems) = show::cue_timeline(
+            &cue,
+            rate,
+            &audio,
+            &|pad| self.pad_target(&cue, pad),
+            &|file| self.level_gain(&cue, file),
+        );
         for mut problem in problems {
             // Say why a file is missing when we know.
             if let Some(file) = problem.message.strip_prefix(show::MISSING_FILE)
@@ -1015,6 +1033,38 @@ impl<B: AudioBackend> Session<B> {
             }
         }
         changed
+    }
+
+    /// Gain that level matching applies to `file` on `cue` (1.0 when off,
+    /// opted out, or the file is unknown).
+    pub fn level_gain(&self, cue: &CueDoc, file: &str) -> f32 {
+        let Some(target) = self.show.level_match.filter(|_| cue.level_match) else {
+            return 1.0;
+        };
+        self.library.get(file).map_or(1.0, |sound| {
+            sound.analysis.gain_to(
+                target,
+                show::LEVEL_MATCH_MAX_BOOST_DB,
+                show::LEVEL_MATCH_CEILING_DBFS,
+            )
+        })
+    }
+
+    /// Turns level matching on at `target` LUFS, or off (`None`). Reloads
+    /// every pad, which stops any that are playing.
+    pub fn set_level_match(&mut self, target: Option<f64>) {
+        let target = target
+            .filter(|t| t.is_finite())
+            .map(|t| t.clamp(-36.0, -6.0));
+        if self.show.level_match == target {
+            return;
+        }
+        self.show.level_match = target;
+        self.dirty = true;
+        let slots: Vec<u32> = self.show.cues.iter().map(|c| c.slot).collect();
+        for slot in slots {
+            self.load_cue(slot);
+        }
     }
 
     /// How a marker on `from` reaches the pad in `slot`.

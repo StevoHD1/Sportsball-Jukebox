@@ -107,7 +107,16 @@ pub struct Show {
     /// preview off.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preview_output: Option<u32>,
+    /// Play every pad at this loudness (LUFS, e.g. -16) unless the pad
+    /// opts out; `None` = off (each file plays as it is).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub level_match: Option<f64>,
 }
+
+/// Most a quiet file is boosted by level matching, dB.
+pub const LEVEL_MATCH_MAX_BOOST_DB: f64 = 12.0;
+/// Level matching never pushes a file's peak above this, dBFS.
+pub const LEVEL_MATCH_CEILING_DBFS: f64 = -1.0;
 
 fn default_stop_all_fade() -> f64 {
     0.5
@@ -188,6 +197,7 @@ impl Default for Show {
             group_fade: default_group_fade(),
             stop_all_fade: default_stop_all_fade(),
             preview_output: None,
+            level_match: None,
         }
     }
 }
@@ -279,6 +289,10 @@ pub struct CueDoc {
     /// Sponsor credited when this pad plays (for sponsor reports).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sponsor: Option<String>,
+    /// Follow the show's level matching (when it is on). Off keeps this
+    /// pad's files exactly as they are, e.g. a deliberately quiet bed.
+    #[serde(default = "yes", skip_serializing_if = "is_true")]
+    pub level_match: bool,
 }
 
 /// Default pad fade-out when none is set, seconds.
@@ -349,6 +363,7 @@ impl CueDoc {
             fade_out: None,
             playlist: None,
             sponsor: None,
+            level_match: true,
         }
     }
 
@@ -692,6 +707,7 @@ pub fn cue_timeline(
     rate: u32,
     audio: &HashMap<String, Arc<AudioBuffer>>,
     pads: &dyn Fn(u32) -> PadTarget,
+    level: &dyn Fn(&str) -> f32,
 ) -> (Timeline, Vec<CueProblem>) {
     let mut problems = Vec::new();
     let mut problem = |message: String| {
@@ -732,7 +748,7 @@ pub fn cue_timeline(
             Clip::new(Arc::clone(buffer))
                 .at(start)
                 .trimmed(offset, length)
-                .with_gain(gain)
+                .with_gain(gain * level(&clip.file))
                 .with_fade_in(Fade::new(secs(clip.fade_in).min(length), curve))
                 .with_fade_out(Fade::new(secs(clip.fade_out).min(length), curve)),
         );

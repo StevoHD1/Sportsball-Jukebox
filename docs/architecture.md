@@ -1,6 +1,6 @@
 # Sportsball Jukebox: Architecture
 
-Status: Phase 9 (markers that fire and stop pads). Last updated 2026-11-24.
+Status: Phase 10 (level matching and silence trimming). Last updated 2026-11-24.
 
 ## Goals, in priority order
 
@@ -388,6 +388,35 @@ sources feed every routed channel; multichannel sources map channel by
 channel. A route beyond the device's channels is reported as a problem
 and the cue plays on all channels.
 
+## Level matching and silence (Phase 10)
+
+`sbj-media/src/analysis.rs` measures every file once, when it is
+decoded (off the audio thread, about 90 ms for a 4-minute stereo song):
+
+- **Integrated loudness** per ITU-R BS.1770-4 / EBU R128: K-weighting
+  (shelf + high pass, coefficients derived for any sample rate), 400 ms
+  blocks with 75 % overlap, absolute gate -70 LUFS, relative gate -10 LU.
+  Sounds shorter than one block are measured as one block. A mono file
+  counts as both speakers of a pair (+3 dB), because the engine plays
+  mono on every channel. A 0 dBFS 1 kHz tone in one channel reads
+  -3.01 LUFS at 44.1, 48 and 96 kHz (tested).
+- **Sample peak**, and **silence** at the start and end (below -60 dBFS),
+  keeping 5 ms before the first sound so attacks are not cut.
+
+With the show's `level_match` target set (e.g. -16 LUFS), every clip and
+playlist song gets a clip gain of `target - loudness`, capped at +12 dB
+of boost and at whatever keeps its peak at or below -1 dBFS. It is a
+static gain baked into the timeline, so it costs nothing at play time,
+and it multiplies with the pad volume, ducking and fades as before. A pad
+can opt out (`"level_match": false`). Changing the target reloads every
+pad.
+
+Files dropped on a pad start where the sound starts: the first clip's
+offset is set to the measured leading silence, so a pad with a second of
+silence at the top still fires instantly. The editor shows each file's
+loudness, peak and the gain applied, and a Trim Silence button for both
+ends.
+
 ## Play log (Phase 7)
 
 `sbj-session/src/log.rs` records each time a pad or playlist song starts:
@@ -533,6 +562,12 @@ CI.
   output (the renderer lines all players up at such markers); within a
   poll on another output.
 - References follow pads that move; plays are logged as `marker`.
+
+**Phase 10: Level matching and silence (built; awaiting Mac testing)**
+- EBU R128 loudness, peak and silence measured for every file.
+- Show-wide level matching to a target (with boost and peak limits),
+  per-pad opt-out, playlists matched song by song.
+- Dropped files skip leading silence; Trim Silence in the editor.
 
 **Next candidates**
 - Signed releases once there is a Developer account.

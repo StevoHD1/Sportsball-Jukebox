@@ -216,8 +216,12 @@ impl<B: AudioBackend> Session<B> {
         else {
             return Ok(());
         };
+        let gain = self
+            .show
+            .cue(slot)
+            .map_or(1.0, |cue| self.level_gain(cue, &file));
         let timeline = Timeline::builder(rate)
-            .clip(Clip::new(buffer))
+            .clip(Clip::new(buffer).with_gain(gain))
             .build()
             .map_err(|e| SessionError::Show(crate::ShowError::Invalid(e.to_string())))?;
         let seconds = samples_to_seconds(timeline.length(), rate);

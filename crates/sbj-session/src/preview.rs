@@ -81,15 +81,23 @@ impl<B: AudioBackend> Session<B> {
                 else {
                     return Ok(());
                 };
+                let gain = self.level_gain(&cue, &playlist.items[next]);
                 Timeline::builder(rate)
-                    .clip(Clip::new(buffer))
+                    .clip(Clip::new(buffer).with_gain(gain))
                     .build()
                     .map_err(|e| SessionError::Show(ShowError::Invalid(e.to_string())))?
             }
             None => {
                 let audio = self.audio_at_rate(&cue, rate);
                 // Markers never act on other pads from the preview player.
-                show::cue_timeline(&cue, rate, &audio, &|_| show::PadTarget::Elsewhere).0
+                show::cue_timeline(
+                    &cue,
+                    rate,
+                    &audio,
+                    &|_| show::PadTarget::Elsewhere,
+                    &|file| self.level_gain(&cue, file),
+                )
+                .0
             }
         };
 

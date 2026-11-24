@@ -237,6 +237,11 @@ private struct EditorHeader: View {
 
                 Toggle("Loop", isOn: $draft.loop)
 
+                if model.show.levelMatch != nil {
+                    Toggle("Level-match", isOn: $draft.levelMatch)
+                        .help("Off keeps this pad's files at their own level (e.g. a deliberately quiet bed)")
+                }
+
                 MidiField(trigger: $draft.midi, slot: draft.slot)
 
                 HStack(spacing: 6) {
@@ -787,7 +792,69 @@ private struct ClipInspector: View {
                     Slider(value: clipGain, in: 0...2).frame(width: 100)
                 }
             }
+            if let info = model.soundInfos[draft.clips[index].file] {
+                HStack(spacing: 18) {
+                    Label(loudnessText(info), systemImage: "speaker.wave.2")
+                        .font(.callout.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .help("Loudness (EBU R128) and peak of the file, and what level matching does to it")
+                    Button("Trim Silence") { trimSilence(info) }
+                        .disabled(!hasSilence(info))
+                        .help("Start where the sound starts and end where it ends, so the pad fires instantly")
+                    if hasSilence(info) {
+                        Text(silenceText(info))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
         }
+    }
+
+    private func loudnessText(_ info: SoundInfo) -> String {
+        guard let loudness = info.loudness else { return "Silent" }
+        var text = String(format: "%.1f LUFS", loudness)
+        if let peak = info.peakDb {
+            text += String(format: ", peak %.1f dBFS", peak)
+        }
+        if draft.levelMatch, let gain = info.levelGainDb {
+            text += String(format: " → plays %+.1f dB", gain)
+        }
+        return text
+    }
+
+    /// Leading or trailing silence worth trimming that is still in the clip.
+    private func hasSilence(_ info: SoundInfo) -> Bool {
+        guard draft.clips.indices.contains(index) else { return false }
+        let clip = draft.clips[index]
+        let lead = info.leadSilence - clip.offset > AppModel.minimumTrimSeconds
+        let soundEnd = info.duration - info.tailSilence
+        let clipEnd = clip.length.map { clip.offset + $0 } ?? info.duration
+        let tail = clipEnd - soundEnd > 0.05
+        return lead || tail
+    }
+
+    private func silenceText(_ info: SoundInfo) -> String {
+        var parts: [String] = []
+        if info.leadSilence >= AppModel.minimumTrimSeconds {
+            parts.append(String(format: "%.2f s silent at the start", info.leadSilence))
+        }
+        if info.tailSilence > 0.05 {
+            parts.append(String(format: "%.2f s at the end", info.tailSilence))
+        }
+        return parts.joined(separator: ", ")
+    }
+
+    private func trimSilence(_ info: SoundInfo) {
+        guard draft.clips.indices.contains(index) else { return }
+        let clip = draft.clips[index]
+        // Never extend a clip the operator already shortened.
+        let clipEnd = clip.length.map { clip.offset + $0 } ?? info.duration
+        let start = max(info.leadSilence, clip.offset)
+        let end = min(clipEnd, info.duration - info.tailSilence)
+        guard end - start > 0.01 else { return }
+        draft.clips[index].offset = start
+        draft.clips[index].length = end - start
     }
 
     private func field<T>(_ keyPath: WritableKeyPath<ClipDoc, T>, _ fallback: T) -> Binding<T> {

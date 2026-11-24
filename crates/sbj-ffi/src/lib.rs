@@ -671,6 +671,9 @@ pub unsafe extern "C" fn sbj_session_set_show_settings_json(
         banks: Vec<String>,
         #[serde(default)]
         stop_all_fade: Option<f64>,
+        /// Absent: unchanged; null: off; a number: target LUFS.
+        #[serde(default)]
+        level_match: Option<serde_json::Value>,
     }
     // SAFETY: forwarded caller contract.
     let settings: Settings = match unsafe { required_str(json, "json") }.and_then(|j| {
@@ -687,12 +690,67 @@ pub unsafe extern "C" fn sbj_session_set_show_settings_json(
             if let Some(fade) = settings.stop_all_fade {
                 session.set_stop_all_fade(fade);
             }
+            if let Some(level) = &settings.level_match {
+                session.set_level_match(level.as_f64());
+            }
             session_status(session.set_show_settings(
                 &settings.name,
                 settings.slots,
                 settings.columns,
                 settings.banks,
             ))
+        })
+    }
+}
+
+/// What was measured about a loaded file, as JSON (null if not loaded):
+/// `{"duration", "loudness": LUFS|null, "peak_db": dBFS|null,
+/// "lead_silence", "tail_silence", "level_gain_db": dB|null}`.
+/// `level_gain_db` is what the show's level matching would apply (null
+/// when it is off or the file is silent). Free with `sbj_string_free`.
+///
+/// # Safety
+/// `session` must be null or a live session; `file` a valid string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sbj_session_sound_info_json(
+    session: *const SbjSession,
+    file: *const c_char,
+) -> *mut c_char {
+    // SAFETY: forwarded caller contract.
+    let file = match unsafe { required_str(file, "file") } {
+        Ok(f) => f.to_owned(),
+        Err(_) => return std::ptr::null_mut(),
+    };
+    // SAFETY: forwarded caller contract.
+    unsafe {
+        session_string(session, |s| {
+            let session = s.lock();
+            let Some(sound) = session.sound(&file) else {
+                return Ok("null".into());
+            };
+            let a = sound.analysis();
+            let finite = |x: f64| x.is_finite().then_some(x);
+            let gain = session
+                .show()
+                .level_match
+                .filter(|_| a.loudness_lufs.is_some())
+                .map(|target| {
+                    let g = a.gain_to(
+                        target,
+                        sbj_session::show::LEVEL_MATCH_MAX_BOOST_DB,
+                        sbj_session::show::LEVEL_MATCH_CEILING_DBFS,
+                    );
+                    20.0 * f64::from(g).log10()
+                });
+            Ok(json!({
+                "duration": sound.duration_seconds(),
+                "loudness": a.loudness_lufs,
+                "peak_db": finite(a.peak_dbfs()),
+                "lead_silence": a.lead_silence,
+                "tail_silence": a.tail_silence,
+                "level_gain_db": gain,
+            })
+            .to_string())
         })
     }
 }

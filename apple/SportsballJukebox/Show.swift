@@ -28,12 +28,15 @@ struct ShowDoc: Codable, Equatable {
     var stopAllFade: Double = 0.5
     /// Output index used for previewing pads (e.g. headphones).
     var previewOutput: Int?
+    /// Target loudness (LUFS) every pad is matched to; nil = off.
+    var levelMatch: Double?
 
     enum CodingKeys: String, CodingKey {
         case format, version, name, slots, columns, banks, outputs, cues, controls
         case groupFade = "group_fade"
         case stopAllFade = "stop_all_fade"
         case previewOutput = "preview_output"
+        case levelMatch = "level_match"
     }
 
     /// Global slot numbers of a bank's pads.
@@ -56,6 +59,7 @@ struct ShowDoc: Codable, Equatable {
         groupFade = try c.value(.groupFade, or: groupFade)
         stopAllFade = try c.value(.stopAllFade, or: stopAllFade)
         previewOutput = try c.decodeIfPresent(Int.self, forKey: .previewOutput)
+        levelMatch = try c.decodeIfPresent(Double.self, forKey: .levelMatch)
         outputs = try c.value(.outputs, or: outputs)
         cues = try c.value(.cues, or: cues)
     }
@@ -160,12 +164,15 @@ struct CueDoc: Codable, Equatable {
     var playlist: PlaylistDoc?
     /// Sponsor credited when this pad plays (sponsor reports).
     var sponsor: String?
+    /// Follows the show's level matching (when it is on).
+    var levelMatch = true
 
     enum CodingKeys: String, CodingKey {
         case slot, title, hotkey, output, gain, loop, color, clips, markers, midi
         case group, duck, retrigger, route, playlist, sponsor
         case fadeIn = "fade_in"
         case fadeOut = "fade_out"
+        case levelMatch = "level_match"
     }
 
     var fadeOutSeconds: Double { fadeOut ?? 0.5 }
@@ -200,6 +207,7 @@ struct CueDoc: Codable, Equatable {
         fadeOut = try c.decodeIfPresent(Double.self, forKey: .fadeOut)
         playlist = try c.decodeIfPresent(PlaylistDoc.self, forKey: .playlist)
         sponsor = try c.decodeIfPresent(String.self, forKey: .sponsor)
+        levelMatch = try c.value(.levelMatch, or: true)
     }
 
     /// A playlist pad of the given files.
@@ -370,6 +378,25 @@ struct MarkerDoc: Codable, Equatable, Identifiable {
         name = try c.value(.name, or: "")
         time = try c.decode(Double.self, forKey: .time)
         action = try c.decode(ActionDoc.self, forKey: .action)
+    }
+}
+
+// MARK: - Sound analysis (from sbj_session_sound_info_json)
+
+struct SoundInfo: Decodable, Equatable {
+    var duration: Double
+    /// Integrated loudness, LUFS (nil for silence).
+    var loudness: Double?
+    var peakDb: Double?
+    var leadSilence: Double
+    var tailSilence: Double
+    /// What the show's level matching applies (nil when off).
+    var levelGainDb: Double?
+
+    static func decode(_ json: String) -> SoundInfo? {
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        return try? decoder.decode(SoundInfo.self, from: Data(json.utf8))
     }
 }
 

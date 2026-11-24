@@ -93,6 +93,8 @@ final class AppModel: ObservableObject {
     /// Durations and waveforms of loaded files, for the editor.
     @Published private(set) var durations: [String: Double] = [:]
     @Published private(set) var waveforms: [String: [Float]] = [:]
+    /// Loudness, peak and silence per file, for the editor.
+    @Published private(set) var soundInfos: [String: SoundInfo] = [:]
 
     static let waveformBuckets = 4000
     private static let lastShowKey = "lastShowPath"
@@ -325,11 +327,19 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func applySettings(name: String, slots: Int, columns: Int, banks: [String], stopAllFade: Double) {
+    func applySettings(
+        name: String, slots: Int, columns: Int, banks: [String], stopAllFade: Double,
+        levelMatch: Double?
+    ) {
         report {
             try session.setShowSettings(
-                name: name, slots: slots, columns: columns, banks: banks, stopAllFade: stopAllFade
+                name: name, slots: slots, columns: columns, banks: banks, stopAllFade: stopAllFade,
+                levelMatch: levelMatch
             )
+        }
+        // The gain level matching would apply depends on the target.
+        for file in soundInfos.keys {
+            soundInfos[file] = session.soundInfo(file: file)
         }
         refreshShow()
     }
@@ -584,8 +594,11 @@ final class AppModel: ObservableObject {
         if cue.hotkey == nil {
             cue.hotkey = freeHotkey(preferring: slot)
         }
-        updateCue(cue)
+        updateCue(cue, trimLeadingSilence: true)
     }
+
+    /// Below this, leading silence is left alone.
+    static let minimumTrimSeconds = 0.01
 
     /// The pad's default key (by its position in its bank) if unused in
     /// that bank, else the first unused one. Keys only act in the visible
@@ -603,19 +616,39 @@ final class AppModel: ObservableObject {
     }
 
     /// Applies a cue in the background (it may need to decode audio).
-    func updateCue(_ cue: CueDoc) {
+    /// `trimLeadingSilence` (for a newly dropped file) starts the first
+    /// clip where the sound starts, so the pad fires instantly.
+    func updateCue(_ cue: CueDoc, trimLeadingSilence: Bool = false) {
         busySlots.insert(cue.slot)
         let session = self.session
+        let minimumTrim = Self.minimumTrimSeconds
         Task.detached(priority: .userInitiated) {
+            var cue = cue
             var failure: String?
+            var info: (String, SoundInfo)?
             do {
+                if trimLeadingSilence, let file = cue.clips.first?.file {
+                    _ = try session.loadSound(file: file)
+                    if let measured = session.soundInfo(file: file) {
+                        info = (file, measured)
+                        if measured.leadSilence >= minimumTrim,
+                           measured.leadSilence < measured.duration {
+                            cue.clips[0].offset = measured.leadSilence
+                        }
+                    }
+                }
                 try session.setCue(cue)
             } catch {
                 failure = error.localizedDescription
             }
             let message = failure
+            let measured = info
+            let slot = cue.slot
             await MainActor.run {
-                self.busySlots.remove(cue.slot)
+                if let measured {
+                    self.soundInfos[measured.0] = measured.1
+                }
+                self.busySlots.remove(slot)
                 if let message {
                     self.alert = AlertMessage(title: "Could not update pad", message: message)
                 }
@@ -667,12 +700,16 @@ final class AppModel: ObservableObject {
         Task.detached(priority: .userInitiated) {
             let duration = try? session.loadSound(file: file)
             let peaks = session.waveform(file: file, buckets: buckets)
+            let info = session.soundInfo(file: file)
             await MainActor.run {
                 if let duration {
                     self.durations[file] = duration
                 }
                 if let peaks {
                     self.waveforms[file] = peaks
+                }
+                if let info {
+                    self.soundInfos[file] = info
                 }
             }
         }

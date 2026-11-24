@@ -62,6 +62,13 @@ int main(void) {
     CHECK(duration > 0.099 && duration < 0.101);
     float peaks[2 * 8];
     CHECK(sbj_session_waveform(s, wav, 8, peaks) == SBJ_STATUS_OK);
+    char *info = sbj_session_sound_info_json(s, wav);
+    CHECK(info != NULL && strstr(info, "\"loudness\"") != NULL);
+    printf("sound info: %s\n", info);
+    sbj_string_free(info);
+    char *none = sbj_session_sound_info_json(s, "not-loaded.wav");
+    CHECK(none != NULL && strcmp(none, "null") == 0);
+    sbj_string_free(none);
     CHECK(peaks[0] < -0.2f && peaks[1] > 0.2f);
 
     char cue[512];
