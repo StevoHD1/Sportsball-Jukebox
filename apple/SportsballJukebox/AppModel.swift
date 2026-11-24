@@ -295,8 +295,12 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func applySettings(name: String, slots: Int, columns: Int, banks: [String]) {
-        report { try session.setShowSettings(name: name, slots: slots, columns: columns, banks: banks) }
+    func applySettings(name: String, slots: Int, columns: Int, banks: [String], stopAllFade: Double) {
+        report {
+            try session.setShowSettings(
+                name: name, slots: slots, columns: columns, banks: banks, stopAllFade: stopAllFade
+            )
+        }
         refreshShow()
     }
 
@@ -370,11 +374,37 @@ final class AppModel: ObservableObject {
     func chooseSound(for slot: Int) {
         let panel = NSOpenPanel()
         panel.title = "Choose a sound for pad \(slot + 1)"
+        panel.message = "Choose several files to make a playlist pad."
         panel.allowedContentTypes = [.audio]
-        panel.allowsMultipleSelection = false
-        if panel.runModal() == .OK, let url = panel.url {
-            assignSound(url: url, to: slot)
+        panel.allowsMultipleSelection = true
+        if panel.runModal() == .OK {
+            assignSounds(urls: panel.urls, to: slot)
         }
+    }
+
+    /// One file: a normal pad. Several: a playlist pad.
+    func assignSounds(urls: [URL], to slot: Int) {
+        guard let first = urls.first else { return }
+        guard urls.count > 1 else {
+            assignSound(url: first, to: slot)
+            return
+        }
+        var cue = show.cue(at: slot) ?? CueDoc(slot: slot)
+        if cue.playlist == nil {
+            cue.title = "Playlist"
+        }
+        cue.clips = []
+        cue.markers = []
+        cue.playlist = PlaylistDoc(items: urls.map(\.path))
+        if cue.hotkey == nil {
+            cue.hotkey = freeHotkey(preferring: slot)
+        }
+        updateCue(cue)
+    }
+
+    /// Playlist pad: crossfade to the next song.
+    func skip(_ slot: Int) {
+        report { try session.skip(slot: slot) }
     }
 
     /// Puts a file on a pad. An existing cue keeps its settings (key,
@@ -385,6 +415,7 @@ final class AppModel: ObservableObject {
         cue.title = title
         cue.clips = [ClipDoc(file: url.path)]
         cue.markers = []
+        cue.playlist = nil
         if cue.hotkey == nil {
             cue.hotkey = freeHotkey(preferring: slot)
         }
@@ -446,11 +477,12 @@ final class AppModel: ObservableObject {
     }
 
     func stop(_ slot: Int, fade: Bool) {
-        report { try session.stop(slot: slot, fadeSeconds: fade ? Self.stopFadeSeconds : 0) }
+        let seconds = fade ? (show.cue(at: slot)?.fadeOutSeconds ?? Self.stopFadeSeconds) : 0
+        report { try session.stop(slot: slot, fadeSeconds: seconds) }
     }
 
     func stopAll() {
-        report { try session.stopAll(fadeSeconds: Self.stopFadeSeconds) }
+        report { try session.stopAll(fadeSeconds: show.stopAllFade) }
     }
 
     func play(_ slot: Int, from seconds: Double) {

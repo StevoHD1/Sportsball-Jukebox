@@ -113,7 +113,7 @@ impl<B: AudioBackend> Session<B> {
         }
         let mut not_ready = 0;
         for cue in &self.show.cues {
-            if cue.clips.is_empty() {
+            if cue.files().is_empty() {
                 add(
                     CheckLevel::Warning,
                     format!("{} has no audio.", pad_name(cue.slot)),

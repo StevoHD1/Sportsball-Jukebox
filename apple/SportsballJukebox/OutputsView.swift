@@ -186,6 +186,7 @@ struct ShowSettingsView: View {
     @State private var slots = 24
     @State private var columns = 6
     @State private var banks: [Bank] = []
+    @State private var stopAllFade = 0.5
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -194,6 +195,13 @@ struct ShowSettingsView: View {
                 TextField("Name", text: $name)
                 Stepper("Pads per bank: \(slots)", value: $slots, in: 1...128)
                 Stepper("Columns: \(columns)", value: $columns, in: 1...16)
+                HStack {
+                    Text("Stop All fade")
+                    TextField("", value: $stopAllFade, format: .number.precision(.fractionLength(0...2)))
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 60)
+                    Text("seconds").foregroundStyle(.secondary)
+                }
             }
             Text("Banks").font(.headline)
             Text("Each bank is a page of pads. Switch with ⌘1–⌘9, the bank tabs, MIDI or OSC.")
@@ -229,7 +237,8 @@ struct ShowSettingsView: View {
                         name: name,
                         slots: slots,
                         columns: columns,
-                        banks: banks.map(\.name)
+                        banks: banks.map(\.name),
+                        stopAllFade: stopAllFade
                     )
                     dismiss()
                 }
@@ -244,6 +253,7 @@ struct ShowSettingsView: View {
             slots = model.show.slots
             columns = model.show.columns
             banks = model.show.banks.map { Bank(name: $0) }
+            stopAllFade = model.show.stopAllFade
         }
     }
 }

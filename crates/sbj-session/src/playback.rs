@@ -15,15 +15,20 @@ const START_GRACE: Duration = Duration::from_millis(250);
 /// How fast other cues dip when a ducking cue starts, and recover after.
 const DUCK_ATTACK_SECONDS: f64 = 0.15;
 const DUCK_RELEASE_SECONDS: f64 = 0.8;
-/// Retrigger "fade" length.
-const RETRIGGER_FADE_SECONDS: f64 = 0.5;
 
 impl<B: AudioBackend> Session<B> {
     pub(crate) fn fire(&mut self, slot: u32) -> Result<()> {
         let Some(cue) = self.show.cue(slot).cloned() else {
             return Ok(());
         };
+        if cue.playlist.is_some() {
+            if self.fire_playlist(slot, &cue)? {
+                self.after_start(slot, &cue);
+            }
+            return Ok(());
+        }
         let player = PlayerId(slot);
+        let duck = self.duck_applied.get(&slot).copied().unwrap_or(1.0);
         let (live, _) = self.live_for(slot)?;
         if live.controller.is_playing(player) {
             if live.controller.is_holding(player) {
@@ -39,14 +44,28 @@ impl<B: AudioBackend> Session<B> {
                     return Ok(());
                 }
                 Retrigger::Fade => {
-                    let fade = seconds_to_samples(RETRIGGER_FADE_SECONDS, live.config.sample_rate);
+                    let fade = seconds_to_samples(cue.fade_out_seconds(), live.config.sample_rate);
                     live.controller.fade_out_and_stop(player, fade)?;
                     self.recent_fires.remove(&slot);
                     return Ok(());
                 }
             }
         }
+        let fade_in = seconds_to_samples(cue.fade_in, live.config.sample_rate) as u32;
+        if fade_in > 0 {
+            live.controller.set_player_gain_over(player, 0.0, 0)?;
+        }
         live.controller.restart(player)?;
+        if fade_in > 0 {
+            live.controller
+                .set_player_gain_over(player, cue.gain * duck, fade_in)?;
+        }
+        self.after_start(slot, &cue);
+        Ok(())
+    }
+
+    /// After a pad starts: exclusive-group hand-over and ducking.
+    fn after_start(&mut self, slot: u32, cue: &crate::CueDoc) {
         self.recent_fires.insert(slot, Instant::now());
 
         // Exclusive group: hand over from whatever else in the group plays.
@@ -77,7 +96,6 @@ impl<B: AudioBackend> Session<B> {
             }
         }
         self.update_ducking();
-        Ok(())
     }
 
     /// Playing, or fired so recently the audio thread has not started it.
@@ -143,11 +161,20 @@ impl<B: AudioBackend> Session<B> {
                     DUCK_RELEASE_SECONDS
                 };
                 let frames = seconds_to_samples(seconds, rate) as u32;
-                if live
+                // Both of the slot's players (playlists alternate them).
+                let gain = cue.gain * target;
+                let ok = live
                     .controller
-                    .set_player_gain_over(PlayerId(slot), cue.gain * target, frames)
-                    .is_ok()
-                {
+                    .set_player_gain_over(PlayerId(slot), gain, frames)
+                    .and_then(|()| {
+                        live.controller.set_player_gain_over(
+                            crate::playlist::player_b(slot),
+                            gain,
+                            frames,
+                        )
+                    })
+                    .is_ok();
+                if ok {
                     self.duck_applied.insert(slot, target);
                 }
             }

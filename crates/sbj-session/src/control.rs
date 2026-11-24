@@ -16,6 +16,7 @@
 //! | `/sbj/title` with a string argument | fire the pad with that title |
 //! | `/sbj/stop/<pad>` or `/sbj/stop/<bank>/<pad>` | stop a pad |
 //! | `/sbj/fade/<pad>` or `/sbj/fade/<bank>/<pad>` | fade a pad out |
+//! | `/sbj/next/<pad>` or `/sbj/next/<bank>/<pad>` | playlist pad: next song |
 //! | `/sbj/stopall` | fade everything out |
 //! | `/sbj/stopall/now` | stop everything immediately |
 //! | `/sbj/bank/<n>`, `/sbj/bank/next`, `/sbj/bank/prev` | change bank |
@@ -28,9 +29,6 @@ use sbj_backend::AudioBackend;
 
 use crate::show::{MidiKind, MidiTrigger};
 use crate::{Result, Session, SessionError};
-
-/// Fade used by "stop all" and "fade" controls, in seconds.
-pub const CONTROL_FADE_SECONDS: f64 = 0.5;
 
 /// A MIDI message we can act on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -166,7 +164,7 @@ impl<B: AudioBackend> Session<B> {
         let controls = self.show.controls.clone();
         if matches(&controls.stop_all) {
             return Some(report(
-                self.stop_all(CONTROL_FADE_SECONDS),
+                self.stop_all(self.show.stop_all_fade),
                 "stop all".into(),
             ));
         }
@@ -220,7 +218,11 @@ impl<B: AudioBackend> Session<B> {
                 Some(slot) => self.osc_fire(slot),
                 None => "needs a pad number".into(),
             },
-            ["sbj", verb @ ("fire" | "go" | "stop" | "fade"), rest @ ..] => {
+            [
+                "sbj",
+                verb @ ("fire" | "go" | "stop" | "fade" | "next"),
+                rest @ ..,
+            ] => {
                 let numbers: Vec<i64> = rest.iter().filter_map(|p| p.parse().ok()).collect();
                 let slot = match numbers.as_slice() {
                     [pad] => self.osc_slot(None, *pad),
@@ -232,16 +234,21 @@ impl<B: AudioBackend> Session<B> {
                     // "go" is "fire" by another name: on a vamping pad it
                     // releases the vamp.
                     (Some(slot), "fire" | "go") => self.osc_fire(slot),
+                    (Some(slot), "next") => {
+                        let label = self.describe_target(LearnTarget::Cue(slot));
+                        report(self.skip_cue(slot), format!("next song on {label}"))
+                    }
                     (Some(slot), "stop") => {
                         let label = self.describe_target(LearnTarget::Cue(slot));
                         report(self.stop_cue(slot, 0.0), format!("stop {label}"))
                     }
                     (Some(slot), _) => {
                         let label = self.describe_target(LearnTarget::Cue(slot));
-                        report(
-                            self.stop_cue(slot, CONTROL_FADE_SECONDS),
-                            format!("fade {label}"),
-                        )
+                        let fade = self
+                            .show
+                            .cue(slot)
+                            .map_or(crate::DEFAULT_FADE_OUT, crate::CueDoc::fade_out_seconds);
+                        report(self.stop_cue(slot, fade), format!("fade {label}"))
                     }
                 }
             }
@@ -262,7 +269,7 @@ impl<B: AudioBackend> Session<B> {
                     None => "no pad with that title".into(),
                 }
             }
-            ["sbj", "stopall"] => report(self.stop_all(CONTROL_FADE_SECONDS), "stop all".into()),
+            ["sbj", "stopall"] => report(self.stop_all(self.show.stop_all_fade), "stop all".into()),
             ["sbj", "stopall", "now"] => report(self.stop_all(0.0), "stop all now".into()),
             ["sbj", "bank", "next"] => {
                 self.step_bank(true);

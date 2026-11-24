@@ -40,30 +40,44 @@ struct CueEditorView: View {
                 .padding(.horizontal, 16)
                 .padding(.vertical, 10)
             Divider()
-            EditorToolbar(
-                cursor: cursor,
-                pointsPerSecond: $pointsPerSecond,
-                isPlaying: state.playing,
-                onAddClip: addClip,
-                onAddMarker: addMarker,
-                onPlayFromCursor: { play(from: cursor) },
-                onPlayFromStart: { play(from: 0) },
-                onStop: { model.stop(slot, fade: false) }
-            )
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
-            CueTimeline(
-                draft: $draft,
-                selection: $selection,
-                cursor: $cursor,
-                pointsPerSecond: pointsPerSecond,
-                playhead: state.playing ? state.position : nil
-            )
-            .frame(minHeight: 220)
-            Divider()
-            InspectorView(draft: $draft, selection: $selection)
-                .frame(height: 170)
+            if draft.playlist != nil {
+                PlaylistEditor(
+                    draft: $draft,
+                    currentItem: state.playing ? state.item : nil,
+                    onPlay: { play(from: 0) },
+                    onSkip: {
+                        apply()
+                        model.skip(slot)
+                    },
+                    onStop: { model.stop(slot, fade: false) }
+                )
+                .frame(minHeight: 390)
+            } else {
+                EditorToolbar(
+                    cursor: cursor,
+                    pointsPerSecond: $pointsPerSecond,
+                    isPlaying: state.playing,
+                    onAddClip: addClip,
+                    onAddMarker: addMarker,
+                    onPlayFromCursor: { play(from: cursor) },
+                    onPlayFromStart: { play(from: 0) },
+                    onStop: { model.stop(slot, fade: false) }
+                )
                 .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+                CueTimeline(
+                    draft: $draft,
+                    selection: $selection,
+                    cursor: $cursor,
+                    pointsPerSecond: pointsPerSecond,
+                    playhead: state.playing ? state.position : nil
+                )
+                .frame(minHeight: 220)
+                Divider()
+                InspectorView(draft: $draft, selection: $selection)
+                    .frame(height: 170)
+                    .padding(.horizontal, 16)
+            }
             Divider()
             footer
                 .padding(16)
@@ -1027,6 +1041,19 @@ private struct PlaybackRow: View {
             .frame(width: 210)
             .help("What pressing the pad does while it plays (a vamp always continues)")
 
+            HStack(spacing: 4) {
+                Text("Fade in")
+                TextField("", value: $draft.fadeIn, format: .number.precision(.fractionLength(0...2)))
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 44)
+                Text("out")
+                TextField("", value: fadeOut, format: .number.precision(.fractionLength(0...2)))
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 44)
+                Text("s").foregroundStyle(.secondary)
+            }
+            .help("Fade in each time the pad fires; fade-out length for Fade Out and \"pressed again: fade\"")
+
             Picker("Channels", selection: route) {
                 Text("All").tag("")
                 ForEach(routeOptions, id: \.self) { option in
@@ -1046,6 +1073,13 @@ private struct PlaybackRow: View {
         let pairs = stride(from: 1, to: channels, by: 2).map { RouteDoc(first: $0, count: 2) }
         let singles = (1...max(channels, 1)).map { RouteDoc(first: $0, count: 1) }
         return pairs + singles
+    }
+
+    private var fadeOut: Binding<Double> {
+        Binding(
+            get: { draft.fadeOutSeconds },
+            set: { draft.fadeOut = max($0, 0) }
+        )
     }
 
     private var group: Binding<String> {
@@ -1077,5 +1111,95 @@ private struct PlaybackRow: View {
                 draft.route = parts.count == 2 ? RouteDoc(first: parts[0], count: parts[1]) : nil
             }
         )
+    }
+}
+
+/// A playlist pad's songs: order (drag to reorder), shuffle,
+/// auto-advance and crossfade.
+private struct PlaylistEditor: View {
+    @Binding var draft: CueDoc
+    let currentItem: Int?
+    let onPlay: () -> Void
+    let onSkip: () -> Void
+    let onStop: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 14) {
+                Button(action: addSongs) { Label("Add Songs…", systemImage: "music.note.list") }
+                Toggle("Shuffle", isOn: field(\.shuffle, false))
+                Toggle("Play on into the next song", isOn: field(\.autoAdvance, true))
+                HStack(spacing: 4) {
+                    Text("Crossfade")
+                    TextField("", value: field(\.crossfade, 2), format: .number.precision(.fractionLength(0...1)))
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 44)
+                    Text("s").foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button(action: onPlay) { Image(systemName: "play.fill") }
+                    .help("Play")
+                Button(action: onSkip) { Image(systemName: "forward.end.fill") }
+                    .help("Next song")
+                Button(action: onStop) { Image(systemName: "stop.fill") }
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 8)
+
+            List {
+                ForEach(Array(items.enumerated()), id: \.offset) { index, file in
+                    HStack {
+                        Text("\(index + 1)")
+                            .font(.callout.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                            .frame(width: 28, alignment: .trailing)
+                        Image(systemName: currentItem == index ? "speaker.wave.2.fill" : "music.note")
+                            .foregroundStyle(currentItem == index ? Color.green : Color.secondary)
+                        Text(URL(fileURLWithPath: file).deletingPathExtension().lastPathComponent)
+                        Spacer()
+                        Button(role: .destructive) {
+                            remove(at: index)
+                        } label: {
+                            Image(systemName: "minus.circle")
+                        }
+                        .buttonStyle(.borderless)
+                        .help("Remove from the playlist")
+                    }
+                }
+                .onMove(perform: move)
+            }
+            Text("Each press plays the next song; pressing while it plays crossfades to the next (or set \"Pressed again\" to stop or fade). Right-click the pad for Next Song.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 16)
+                .padding(.bottom, 8)
+        }
+    }
+
+    private var items: [String] { draft.playlist?.items ?? [] }
+
+    private func field<T>(_ keyPath: WritableKeyPath<PlaylistDoc, T>, _ fallback: T) -> Binding<T> {
+        Binding(
+            get: { draft.playlist?[keyPath: keyPath] ?? fallback },
+            set: { value in draft.playlist?[keyPath: keyPath] = value }
+        )
+    }
+
+    private func addSongs() {
+        let panel = NSOpenPanel()
+        panel.title = "Add songs"
+        panel.allowedContentTypes = [.audio]
+        panel.allowsMultipleSelection = true
+        guard panel.runModal() == .OK else { return }
+        draft.playlist?.items.append(contentsOf: panel.urls.map(\.path))
+    }
+
+    private func remove(at index: Int) {
+        guard draft.playlist?.items.indices.contains(index) == true else { return }
+        draft.playlist?.items.remove(at: index)
+    }
+
+    private func move(from source: IndexSet, to destination: Int) {
+        draft.playlist?.items.move(fromOffsets: source, toOffset: destination)
     }
 }

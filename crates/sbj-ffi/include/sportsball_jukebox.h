@@ -56,6 +56,7 @@ typedef struct SbjCueState {
     bool looping;
     bool ready;     /* loaded on an open output: can fire */
     bool holding;   /* vamping: firing again lets it continue */
+    uint32_t item;  /* playlist pads: current song index, UINT32_MAX if none */
     double position_seconds;
     double duration_seconds;
 } SbjCueState;
@@ -115,7 +116,8 @@ SbjStatus sbj_session_new_show(const SbjSession *session);
 SbjStatus sbj_session_open_show(const SbjSession *session, const char *path);
 /* path NULL = the show's current file. Writes atomically. */
 SbjStatus sbj_session_save_show(const SbjSession *session, const char *path);
-/* {"name", "slots" (pads per bank), "columns", "banks": [names]}.
+/* {"name", "slots" (pads per bank), "columns", "banks": [names],
+ *  "stop_all_fade"?: seconds}.
  * Cue slots are bank * slots + pad; resizing keeps each cue's bank/pad. */
 SbjStatus sbj_session_set_show_settings_json(const SbjSession *session, const char *json);
 /* The visible bank (0-based): hotkeys and OSC pad numbers refer to it. */
@@ -160,6 +162,8 @@ SbjStatus sbj_session_waveform(const SbjSession *session, const char *file,
  * or applies its retrigger setting. Handles exclusive groups and ducking.
  * Empty pad: no-op. */
 SbjStatus sbj_session_fire_cue(const SbjSession *session, uint32_t slot);
+/* Playlist pad: crossfade to the next song (or start it). */
+SbjStatus sbj_session_skip_cue(const SbjSession *session, uint32_t slot);
 SbjStatus sbj_session_play_cue_from(const SbjSession *session, uint32_t slot, double seconds);
 SbjStatus sbj_session_stop_cue(const SbjSession *session, uint32_t slot, double fade_seconds);
 SbjStatus sbj_session_stop_all(const SbjSession *session, double fade_seconds);

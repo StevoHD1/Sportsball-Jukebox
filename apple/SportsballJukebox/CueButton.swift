@@ -68,7 +68,8 @@ struct CueButton: View {
             if url.scheme == padScheme, let from = Int(url.host ?? "") {
                 model.move(from: from, to: slot)
             } else if url.isFileURL {
-                model.assignSound(url: url, to: slot)
+                // Several files make a playlist pad.
+                model.assignSounds(urls: urls.filter(\.isFileURL), to: slot)
             } else {
                 return false
             }
@@ -113,7 +114,10 @@ struct CueButton: View {
     private var menu: some View {
         if let cue {
             Button("Edit Pad…") { model.editing = EditTarget(id: slot) }
-            Button("Replace Sound…") { model.chooseSound(for: slot) }
+            if cue.playlist != nil {
+                Button("Next Song") { model.skip(slot) }
+            }
+            Button(cue.playlist == nil ? "Replace Sound…" : "Replace Songs…") { model.chooseSound(for: slot) }
             Toggle("Loop", isOn: Binding(
                 get: { cue.loop },
                 set: { model.setLoop(slot, $0) }
@@ -162,6 +166,12 @@ private struct PadFace: View {
                     .font(.headline)
                     .lineLimit(2)
                     .opacity(cue == nil ? 0.5 : 1)
+                if let song = playlistLine {
+                    Text(song)
+                        .font(.caption)
+                        .lineLimit(1)
+                        .opacity(0.9)
+                }
                 if let group = cue?.group, !group.isEmpty {
                     Text(group.uppercased())
                         .font(.caption2.weight(.semibold))
@@ -219,6 +229,16 @@ private struct PadFace: View {
                 ProgressView().controlSize(.small)
             }
         }
+    }
+
+    /// "♫ 3/12 · Song name" for playlist pads.
+    private var playlistLine: String? {
+        guard let items = cue?.playlist?.items, !items.isEmpty else { return nil }
+        guard let index = state.item, items.indices.contains(index) else {
+            return "♫ \(items.count) songs"
+        }
+        let name = URL(fileURLWithPath: items[index]).deletingPathExtension().lastPathComponent
+        return "♫ \(index + 1)/\(items.count) · \(name)"
     }
 
     private var background: Color {

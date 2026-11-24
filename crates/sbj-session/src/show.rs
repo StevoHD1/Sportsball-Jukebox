@@ -97,6 +97,19 @@ pub struct Show {
         skip_serializing_if = "is_default_group_fade"
     )]
     pub group_fade: f64,
+    /// Fade used by Stop All (button, Esc, MIDI, OSC), seconds.
+    #[serde(
+        default = "default_stop_all_fade",
+        skip_serializing_if = "is_default_stop_all_fade"
+    )]
+    pub stop_all_fade: f64,
+}
+
+fn default_stop_all_fade() -> f64 {
+    0.5
+}
+fn is_default_stop_all_fade(x: &f64) -> bool {
+    *x == 0.5
 }
 
 fn default_group_fade() -> f64 {
@@ -169,6 +182,7 @@ impl Default for Show {
             cues: Vec::new(),
             controls: ControlsDoc::default(),
             group_fade: default_group_fade(),
+            stop_all_fade: default_stop_all_fade(),
         }
     }
 }
@@ -245,6 +259,64 @@ pub struct CueDoc {
     /// Output channels; `None` = all channels of the output.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub route: Option<RouteDoc>,
+    /// Fade in over this many seconds each time the pad is fired.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub fade_in: f64,
+    /// Length of this pad's fade-outs (Fade Out, "pressed again: fade",
+    /// OSC fade); `None` = 0.5 s.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fade_out: Option<f64>,
+    /// Makes the pad a playlist: each press (or the end of each song, with
+    /// auto-advance) plays the next item. `clips` and `markers` are not
+    /// used by playlist pads.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub playlist: Option<PlaylistDoc>,
+}
+
+/// Default pad fade-out when none is set, seconds.
+pub const DEFAULT_FADE_OUT: f64 = 0.5;
+
+/// A playlist pad's songs and how it moves through them.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PlaylistDoc {
+    /// Audio files, in play order (unless shuffled).
+    pub items: Vec<String>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub shuffle: bool,
+    /// Carry on into the next item when one ends (otherwise each press
+    /// plays one item).
+    #[serde(default = "yes", skip_serializing_if = "is_true")]
+    pub auto_advance: bool,
+    /// Crossfade between items, seconds.
+    #[serde(
+        default = "default_crossfade",
+        skip_serializing_if = "is_default_crossfade"
+    )]
+    pub crossfade: f64,
+}
+
+fn yes() -> bool {
+    true
+}
+fn is_true(b: &bool) -> bool {
+    *b
+}
+fn default_crossfade() -> f64 {
+    2.0
+}
+fn is_default_crossfade(x: &f64) -> bool {
+    *x == 2.0
+}
+
+impl PlaylistDoc {
+    pub fn new(items: Vec<String>) -> Self {
+        Self {
+            items,
+            shuffle: false,
+            auto_advance: true,
+            crossfade: default_crossfade(),
+        }
+    }
 }
 
 impl CueDoc {
@@ -265,7 +337,24 @@ impl CueDoc {
             duck: None,
             retrigger: Retrigger::Restart,
             route: None,
+            fade_in: 0.0,
+            fade_out: None,
+            playlist: None,
         }
+    }
+
+    /// Every audio file the cue uses.
+    pub fn files(&self) -> Vec<String> {
+        let mut files: Vec<String> = self.clips.iter().map(|c| c.file.clone()).collect();
+        if let Some(playlist) = &self.playlist {
+            files.extend(playlist.items.iter().cloned());
+        }
+        files
+    }
+
+    /// The pad's fade-out length, seconds.
+    pub fn fade_out_seconds(&self) -> f64 {
+        self.fade_out.unwrap_or(DEFAULT_FADE_OUT).max(0.0)
     }
 }
 
@@ -516,11 +605,7 @@ impl Show {
 
     /// Every file referenced by any cue.
     pub fn files(&self) -> Vec<String> {
-        let mut files: Vec<String> = self
-            .cues
-            .iter()
-            .flat_map(|c| c.clips.iter().map(|clip| clip.file.clone()))
-            .collect();
+        let mut files: Vec<String> = self.cues.iter().flat_map(CueDoc::files).collect();
         files.sort();
         files.dedup();
         files

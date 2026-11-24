@@ -153,3 +153,155 @@ fn routing_to_channel_pairs() {
     s.set_cue(c).unwrap();
     assert!(s.problems()[0].message.contains("channels 7-10"));
 }
+
+// ---------------------------------------------------------------------
+// Playlists and fades
+// ---------------------------------------------------------------------
+
+use sbj_session::PlaylistDoc;
+
+/// Pad 0 is a playlist of three constant-value songs a/b/c (0.1/0.2/0.3,
+/// 4800 frames = 0.1 s each) with a 10 ms crossfade.
+fn playlist_session(auto_advance: bool, shuffle: bool) -> Session<OfflineBackend> {
+    let backend = two_devices();
+    let mut s = session(&backend);
+    for (name, value) in [("a", 0.1), ("b", 0.2), ("c", 0.3)] {
+        s.add_sound(name.into(), constant(value, 4_800));
+    }
+    let mut c = CueDoc::simple(0, "Timeout", "unused");
+    c.clips.clear();
+    c.playlist = Some(PlaylistDoc {
+        items: vec!["a".into(), "b".into(), "c".into()],
+        shuffle,
+        auto_advance,
+        crossfade: 0.01,
+    });
+    s.set_cue(c).unwrap();
+    assert!(s.problems().is_empty(), "{:?}", s.problems());
+    s
+}
+
+#[test]
+fn playlist_plays_one_item_per_press_and_crossfades_on_skip() {
+    let mut s = playlist_session(false, false);
+    assert!(
+        s.preflight()
+            .checks
+            .iter()
+            .all(|c| !c.message.contains("no audio")),
+        "a playlist pad has audio"
+    );
+    s.fire_cue(0).unwrap();
+    let out = pull(&mut s, 0, 100);
+    assert!(out.iter().all(|&x| (x - 0.1).abs() < 1e-6));
+    assert_eq!(s.cue_state(0).unwrap().item, Some(0));
+
+    // Press while playing: crossfade to the next song over 10 ms.
+    s.fire_cue(0).unwrap();
+    let out = pull(&mut s, 0, 1000);
+    assert!((out[240] - 0.15).abs() < 0.01, "mid-crossfade {}", out[240]);
+    assert!((out[900] - 0.2).abs() < 1e-6);
+    assert_eq!(s.cue_state(0).unwrap().item, Some(1));
+
+    // Without auto-advance it stops at the end of the song.
+    pull(&mut s, 0, 5000);
+    s.poll();
+    assert!(!s.cue_state(0).unwrap().playing);
+    s.fire_cue(0).unwrap();
+    pull(&mut s, 0, 10);
+    assert_eq!(s.cue_state(0).unwrap().item, Some(2));
+    s.fire_cue(0).unwrap(); // wraps
+    pull(&mut s, 0, 10);
+    assert_eq!(s.cue_state(0).unwrap().item, Some(0));
+}
+
+#[test]
+fn playlist_auto_advances_and_wraps() {
+    let mut s = playlist_session(true, false);
+    s.fire_cue(0).unwrap();
+    let mut seen = Vec::new();
+    for _ in 0..200 {
+        let out = pull(&mut s, 0, 256);
+        assert!(out.iter().all(|&x| x > 0.05), "no gap between songs");
+        s.poll();
+        let item = s.cue_state(0).unwrap().item;
+        if seen.last() != Some(&item) {
+            seen.push(item);
+        }
+    }
+    assert!(s.cue_state(0).unwrap().playing, "keeps going: {seen:?}");
+    // Each next song starts 60 ms (10 ms crossfade + 50 ms poll margin)
+    // before the previous one ends, i.e. every 4800 - 2880 = 1920 frames
+    // here; the outgoing song still plays to its end (checked above).
+    let expected = 200 * 256 / 1920;
+    assert!(
+        seen.len().abs_diff(expected) <= 2,
+        "{} songs, expected ~{expected}: {seen:?}",
+        seen.len()
+    );
+    assert_eq!(
+        &seen[..5],
+        &[Some(0), Some(1), Some(2), Some(0), Some(1)],
+        "{seen:?}"
+    );
+    s.stop_cue(0, 0.0).unwrap();
+    pull(&mut s, 0, 1000);
+    assert!(!s.cue_state(0).unwrap().playing, "stop stops both players");
+}
+
+#[test]
+fn shuffle_plays_everything_once_per_round_without_repeats() {
+    let mut s = playlist_session(false, true);
+    let mut order = Vec::new();
+    for _ in 0..30 {
+        s.skip_cue(0).unwrap();
+        pull(&mut s, 0, 10);
+        order.push(s.cue_state(0).unwrap().item.unwrap());
+    }
+    for round in order.chunks(3) {
+        let mut sorted = round.to_vec();
+        sorted.sort();
+        assert_eq!(sorted, vec![0, 1, 2], "{order:?}");
+    }
+    assert!(
+        order.windows(2).all(|w| w[0] != w[1]),
+        "no repeats: {order:?}"
+    );
+}
+
+#[test]
+fn playlist_missing_items_are_reported_and_skipped() {
+    let backend = two_devices();
+    let mut s = session(&backend);
+    s.add_sound("a".into(), constant(0.1, 4_800));
+    let mut c = CueDoc::simple(0, "P", "unused");
+    c.clips.clear();
+    c.playlist = Some(PlaylistDoc::new(vec!["/nope/gone.wav".into(), "a".into()]));
+    s.set_cue(c).unwrap();
+    assert!(s.problems().iter().any(|p| p.message.contains("gone.wav")));
+    s.fire_cue(0).unwrap();
+    pull(&mut s, 0, 10);
+    assert_eq!(s.cue_state(0).unwrap().item, Some(1));
+}
+
+#[test]
+fn fade_in_on_fire_and_pad_fade_out_length() {
+    let backend = two_devices();
+    let mut s = session(&backend);
+    s.add_sound("a".into(), constant(1.0, 100_000));
+    let mut c = cue(0, "a");
+    c.fade_in = 0.01; // 480 frames
+    c.fade_out = Some(0.02); // 960 frames
+    c.retrigger = Retrigger::Fade;
+    s.set_cue(c).unwrap();
+    s.fire_cue(0).unwrap();
+    let out = pull(&mut s, 0, 1000);
+    assert!(out[0] < 0.01, "starts silent: {}", out[0]);
+    assert!((out[240] - 0.5).abs() < 0.01, "{}", out[240]);
+    assert!((out[600] - 1.0).abs() < 1e-6);
+
+    s.fire_cue(0).unwrap(); // pressed again: fade over the pad's 20 ms
+    let out = pull(&mut s, 0, 2000);
+    assert!((out[480] - 0.5).abs() < 0.01, "{}", out[480]);
+    assert!(out[960..].iter().all(|&x| x == 0.0));
+}

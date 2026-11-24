@@ -1,6 +1,6 @@
 # Sportsball Jukebox: Architecture
 
-Status: Phase 4 (game-day workflow). Last updated 2026-11-24.
+Status: Phase 5 (playlists and fades). Last updated 2026-11-24.
 
 ## Goals, in priority order
 
@@ -304,6 +304,26 @@ its key, MIDI or OSC:
    audio thread reports it (at most 250 ms), so ducking starts at once.
    Recovery is noticed on the UI's next poll, within about 33 ms.
 
+**Fades.** A pad's `fade_in` ramps it up from silence each time it
+fires. The pad's gain is set to zero instantly before the restart, then
+ramped. Its `fade_out` (default 0.5 s) is the length used by Fade Out,
+"pressed again: fade" and OSC `/sbj/fade`. The show's `stop_all_fade`
+(default 0.5 s) is used by Stop All from every source.
+
+**Playlist pads.** A cue with `playlist` plays one of its `items` per
+press, in order or shuffled. With `auto_advance` it carries on through
+them, wrapping around. Every pad slot has two engine players: its own and
+a twin at `slot + MAX_SLOTS` (outputs therefore run 1024 players). A
+playlist alternates between them, so the next song fades in on the idle
+player while the current one fades out. Auto-advance starts the next song
+50 ms more than the crossfade before the end, so the UI's poll interval
+can never leave a gap, and fades over exactly the time remaining, so the
+outgoing song still plays to its end. Pressing a playing playlist pad
+crossfades to the next song, or stops or fades it if its retrigger
+setting says so. Shuffle never repeats a song across a reshuffle. A
+playlist pad counts as playing while either of its players is, and the
+cue state reports the current item for the UI.
+
 **Routing.** A cue's `route` (`first`, `count`, 1-based) sends it to
 specific output channels (e.g. 3–4 of an 8-channel interface). Mono
 sources feed every routed channel; multichannel sources map channel by
@@ -407,9 +427,13 @@ CI.
 - Ducking other pads on the same output while a pad plays.
 - Per-pad output channel routing.
 
+**Phase 5: Playlists and fades (built; awaiting Mac testing)**
+- Playlist pads: in order or shuffled; one song per press or carrying on
+  with crossfades; Next Song from the menu, MIDI (fire) or OSC
+  `/sbj/next/<pad>`. Dropping several files on a pad makes one.
+- Per-pad fade-in on fire and fade-out length; show-wide Stop All fade.
+
 **Next candidates**
-- Playlists: a pad that steps through a list of songs (e.g. timeout
-  music), with shuffle.
-- Fade-in/out curves per pad on fire and stop, and a "panic" fade time
-  setting.
+- Countdown / "time left" display for the operator (next song, end of
+  vamp), and a hold-to-preview (cue) output for headphones.
 - Signed releases once there is a Developer account.

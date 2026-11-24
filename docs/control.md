@@ -43,9 +43,10 @@ Turn OSC on in **Show → MIDI & OSC…** and pick a UDP port (default
 | `/sbj/fire` + int argument | Fire that pad in the bank shown |
 | `/sbj/go/<pad>`, `/sbj/go/<bank>/<pad>` | Same as fire. On a vamping pad it lets the music continue, which is clearer on a Stream Deck button |
 | `/sbj/title` + string argument | Fire the pad with that title (any case) |
+| `/sbj/next/<pad>`, `/sbj/next/<bank>/<pad>` | Playlist pad: crossfade to the next song |
 | `/sbj/stop/<pad>`, `/sbj/stop/<bank>/<pad>` | Stop a pad |
-| `/sbj/fade/<pad>`, `/sbj/fade/<bank>/<pad>` | Fade a pad out (0.5 s) |
-| `/sbj/stopall` | Fade everything out (0.5 s) |
+| `/sbj/fade/<pad>`, `/sbj/fade/<bank>/<pad>` | Fade a pad out (over the pad's fade-out time, 0.5 s by default) |
+| `/sbj/stopall` | Fade everything out (over the show's Stop All fade, 0.5 s by default) |
 | `/sbj/stopall/now` | Stop everything immediately |
 | `/sbj/bank/<n>`, `/sbj/bank/next`, `/sbj/bank/prev` | Change bank |
 

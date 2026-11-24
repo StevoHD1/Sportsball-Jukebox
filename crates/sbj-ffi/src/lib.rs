@@ -72,6 +72,9 @@ pub struct SbjCueState {
     pub ready: bool,
     /// Vamping: firing the pad again lets it continue past its vamp.
     pub holding: bool,
+    /// Playlist pads: index of the song playing or last played in the
+    /// playlist's items; `u32::MAX` if none / not a playlist.
+    pub item: u32,
     pub position_seconds: f64,
     pub duration_seconds: f64,
 }
@@ -632,6 +635,8 @@ pub unsafe extern "C" fn sbj_session_set_show_settings_json(
         slots: u32,
         columns: u32,
         banks: Vec<String>,
+        #[serde(default)]
+        stop_all_fade: Option<f64>,
     }
     // SAFETY: forwarded caller contract.
     let settings: Settings = match unsafe { required_str(json, "json") }.and_then(|j| {
@@ -644,7 +649,11 @@ pub unsafe extern "C" fn sbj_session_set_show_settings_json(
     // SAFETY: forwarded caller contract.
     unsafe {
         with_session(session, |s| {
-            session_status(s.lock().set_show_settings(
+            let mut session = s.lock();
+            if let Some(fade) = settings.stop_all_fade {
+                session.set_stop_all_fade(fade);
+            }
+            session_status(session.set_show_settings(
                 &settings.name,
                 settings.slots,
                 settings.columns,
@@ -1043,6 +1052,9 @@ cue_fn!(
     /// Firing an empty pad does nothing.
     sbj_session_fire_cue() => |s, slot| s.fire_cue(slot));
 cue_fn!(
+    /// Playlist pad: crossfade to the next song (or start, if stopped).
+    sbj_session_skip_cue() => |s, slot| s.skip_cue(slot));
+cue_fn!(
     /// Plays a cue from `seconds` into its timeline.
     sbj_session_play_cue_from(seconds: f64) => |s, slot| s.play_cue_from(slot, seconds));
 cue_fn!(
@@ -1108,6 +1120,7 @@ pub unsafe extern "C" fn sbj_session_cue_states(
                     looping: st.looping,
                     ready: st.ready,
                     holding: st.holding,
+                    item: st.item.unwrap_or(u32::MAX),
                     position_seconds: st.position_seconds,
                     duration_seconds: st.duration_seconds,
                 };

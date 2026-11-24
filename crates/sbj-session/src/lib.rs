@@ -31,14 +31,15 @@ use sbj_media::MediaError;
 
 pub mod control;
 mod playback;
+mod playlist;
 mod preflight;
 
 pub use control::{ControlMessage, LearnTarget, MidiMessage};
 pub use preflight::{Check, CheckLevel, Preflight};
 pub use show::{
-    ActionDoc, ActionKind, ClipDoc, ControlsDoc, CueDoc, CueProblem, CurveDoc, DeviceRef,
-    MAX_PADS_PER_BANK, MAX_SLOTS, MarkerDoc, MidiKind, MidiTrigger, OutputDoc, Retrigger, RouteDoc,
-    Show, ShowError, TargetDoc,
+    ActionDoc, ActionKind, ClipDoc, ControlsDoc, CueDoc, CueProblem, CurveDoc, DEFAULT_FADE_OUT,
+    DeviceRef, MAX_PADS_PER_BANK, MAX_SLOTS, MarkerDoc, MidiKind, MidiTrigger, OutputDoc,
+    PlaylistDoc, Retrigger, RouteDoc, Show, ShowError, TargetDoc,
 };
 
 /// How often to retry an output whose devices are all unavailable.
@@ -237,6 +238,9 @@ pub struct CueState {
     pub ready: bool,
     /// Playing a vamp: pressing the pad will let it continue.
     pub holding: bool,
+    /// Playlist pads: index (in the playlist's items) of the song playing
+    /// or last played.
+    pub item: Option<u32>,
     pub position_seconds: f64,
     pub duration_seconds: f64,
 }
@@ -323,6 +327,7 @@ pub struct Session<B: AudioBackend> {
     /// When each slot was last fired, so a cue counts as playing before
     /// the audio thread has started it.
     recent_fires: HashMap<u32, Instant>,
+    playlists: HashMap<u32, playlist::PlaylistState>,
 }
 
 impl<B: AudioBackend> Session<B> {
@@ -348,6 +353,7 @@ impl<B: AudioBackend> Session<B> {
             last_control: None,
             duck_applied: HashMap::new(),
             recent_fires: HashMap::new(),
+            playlists: HashMap::new(),
         }
     }
 
@@ -475,6 +481,19 @@ impl<B: AudioBackend> Session<B> {
             self.load_cue(slot);
         }
         Ok(())
+    }
+
+    /// Sets how long Stop All takes to fade everything out.
+    pub fn set_stop_all_fade(&mut self, seconds: f64) {
+        let seconds = if seconds.is_finite() {
+            seconds.clamp(0.0, 30.0)
+        } else {
+            0.5
+        };
+        if self.show.stop_all_fade != seconds {
+            self.show.stop_all_fade = seconds;
+            self.dirty = true;
+        }
     }
 
     // ---- Banks ------------------------------------------------------------
@@ -641,7 +660,8 @@ impl<B: AudioBackend> Session<B> {
         if let Some(seconds) = self.declick_seconds {
             engine.declick_frames = seconds_to_samples(seconds, config.sample_rate) as u32;
         }
-        engine.players = MAX_SLOTS;
+        // Two players per pad: playlists crossfade between them.
+        engine.players = MAX_SLOTS * 2;
         let (mut controller, mut renderer) = Engine::create(engine)?;
         controller.set_master_gain(self.master_gain)?;
         let stream = self.backend.open_output(
@@ -755,7 +775,9 @@ impl<B: AudioBackend> Session<B> {
             && let Some(live) = self.outputs[previous.output].live.as_mut()
         {
             let _ = live.controller.unload(PlayerId(slot));
+            let _ = live.controller.unload(playlist::player_b(slot));
         }
+        self.playlists.remove(&slot);
         let Some(cue) = self.show.cue(slot).cloned() else {
             return;
         };
@@ -765,6 +787,19 @@ impl<B: AudioBackend> Session<B> {
                 slot,
                 message: format!("output {} does not exist; using the first", cue.output + 1),
             });
+        }
+        if cue.playlist.is_some() {
+            if self.outputs[index].live.is_some() {
+                self.loaded.insert(
+                    slot,
+                    LoadedCue {
+                        output: index,
+                        length_seconds: 0.0,
+                    },
+                );
+            }
+            self.load_playlist(slot, &cue);
+            return;
         }
         let Some(live) = self.outputs[index].live.as_mut() else {
             return;
@@ -945,10 +980,12 @@ impl<B: AudioBackend> Session<B> {
         self.recent_fires.remove(&slot);
         let (live, _) = self.live_for(slot)?;
         let fade = seconds_to_samples(fade_seconds, live.config.sample_rate);
-        if fade == 0 {
-            live.controller.stop(PlayerId(slot))?;
-        } else {
-            live.controller.fade_out_and_stop(PlayerId(slot), fade)?;
+        for player in [PlayerId(slot), playlist::player_b(slot)] {
+            if fade == 0 {
+                live.controller.stop(player)?;
+            } else if live.controller.is_playing(player) {
+                live.controller.fade_out_and_stop(player, fade)?;
+            }
         }
         Ok(())
     }
@@ -988,13 +1025,23 @@ impl<B: AudioBackend> Session<B> {
         if let Some(loaded) = self.loaded.get(&slot)
             && let Some(live) = &self.outputs[loaded.output].live
         {
-            let player = PlayerId(slot);
+            let playlist = self.playlists.get(&slot);
+            let player = playlist.map_or(PlayerId(slot), |p| p.active(slot));
             state.ready = true;
-            state.playing = live.controller.is_playing(player);
+            state.item = playlist.and_then(|p| p.current).map(|i| i as u32);
+            // A playlist pad is playing while either of its players is
+            // (during a crossfade, or just before the new song starts).
+            state.playing = live.controller.is_playing(player)
+                || (playlist.is_some()
+                    && live.controller.is_playing(if player.0 < MAX_SLOTS {
+                        playlist::player_b(slot)
+                    } else {
+                        PlayerId(slot)
+                    }));
             state.holding = live.controller.is_holding(player);
             state.position_seconds =
                 samples_to_seconds(live.controller.position(player), live.config.sample_rate);
-            state.duration_seconds = loaded.length_seconds;
+            state.duration_seconds = playlist.map_or(loaded.length_seconds, |p| p.item_seconds);
         }
         Ok(state)
     }
@@ -1018,6 +1065,7 @@ impl<B: AudioBackend> Session<B> {
             while live.controller.poll_event().is_some() {}
             live.controller.collect_garbage();
         }
+        self.advance_playlists();
         self.update_ducking();
         let now = Instant::now();
         for index in 0..self.outputs.len() {

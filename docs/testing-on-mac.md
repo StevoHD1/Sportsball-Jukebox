@@ -141,6 +141,18 @@ built-in speakers or headphones)
 - [ ] With a multichannel interface, set a pad's Channels to 3–4: it
       plays only there.
 
+**Phase 5: playlists and fades**
+- [ ] Drag three songs onto an empty pad at once: it becomes a playlist
+      ("♫ 3 songs"). Fire it: the pad shows "♫ 1/3 · <song>".
+- [ ] Press it again while playing: it crossfades to the next song.
+- [ ] Let it play: at the end of each song it crossfades into the next
+      without a gap, and wraps around after the last one.
+- [ ] In its editor, turn on Shuffle, reorder songs by dragging, and set
+      the crossfade. Right-click the pad → Next Song.
+- [ ] Give a pad a 1 s fade-in: it swells up when fired. Give it a 3 s
+      fade-out: right-click → Fade Out takes 3 s.
+- [ ] Show Settings → Stop All fade 2 s: Esc now takes 2 s.
+
 **Stress**
 - [ ] Leave a looping cue running for 10+ minutes. The status line should
       not start showing "glitches".

@@ -120,6 +120,7 @@ int main(void) {
     CHECK(sbj_session_cue_states(s, 3, 1, states) == SBJ_STATUS_OK && !states[0].assigned);
     CHECK(sbj_session_open_show(s, show_path) == SBJ_STATUS_OK);
     CHECK(sbj_session_cue_states(s, 3, 1, states) == SBJ_STATUS_OK && states[0].assigned);
+    CHECK(sbj_session_skip_cue(s, 3) == SBJ_STATUS_OK || sbj_session_skip_cue(s, 3) == SBJ_STATUS_NO_OUTPUT);
     CHECK(sbj_session_move_cue(s, 3, 4) == SBJ_STATUS_OK);
     CHECK(sbj_session_remove_cue(s, 4) == SBJ_STATUS_OK);
     CHECK(sbj_session_set_outputs_json(s, "[{\"name\":\"Main\"},{\"name\":\"Lobby\"}]") ==

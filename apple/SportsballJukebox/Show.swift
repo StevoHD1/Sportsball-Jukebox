@@ -24,10 +24,13 @@ struct ShowDoc: Codable, Equatable {
     var controls = ControlsDoc()
     /// Seconds an exclusive group takes to hand over.
     var groupFade: Double = 1.0
+    /// Seconds Stop All takes to fade everything out.
+    var stopAllFade: Double = 0.5
 
     enum CodingKeys: String, CodingKey {
         case format, version, name, slots, columns, banks, outputs, cues, controls
         case groupFade = "group_fade"
+        case stopAllFade = "stop_all_fade"
     }
 
     /// Global slot numbers of a bank's pads.
@@ -48,6 +51,7 @@ struct ShowDoc: Codable, Equatable {
         banks = try c.value(.banks, or: banks)
         controls = try c.value(.controls, or: controls)
         groupFade = try c.value(.groupFade, or: groupFade)
+        stopAllFade = try c.value(.stopAllFade, or: stopAllFade)
         outputs = try c.value(.outputs, or: outputs)
         cues = try c.value(.cues, or: cues)
     }
@@ -144,11 +148,21 @@ struct CueDoc: Codable, Equatable {
     var duck: Float?
     var retrigger: Retrigger = .restart
     var route: RouteDoc?
+    /// Seconds to fade in each time the pad fires.
+    var fadeIn: Double = 0
+    /// Seconds this pad's fade-outs take (nil = 0.5).
+    var fadeOut: Double?
+    /// Makes the pad a playlist.
+    var playlist: PlaylistDoc?
 
     enum CodingKeys: String, CodingKey {
         case slot, title, hotkey, output, gain, loop, color, clips, markers, midi
-        case group, duck, retrigger, route
+        case group, duck, retrigger, route, playlist
+        case fadeIn = "fade_in"
+        case fadeOut = "fade_out"
     }
+
+    var fadeOutSeconds: Double { fadeOut ?? 0.5 }
 
     init(slot: Int, title: String, file: String) {
         self.slot = slot
@@ -176,11 +190,45 @@ struct CueDoc: Codable, Equatable {
         duck = try c.decodeIfPresent(Float.self, forKey: .duck)
         retrigger = try c.value(.retrigger, or: .restart)
         route = try c.decodeIfPresent(RouteDoc.self, forKey: .route)
+        fadeIn = try c.value(.fadeIn, or: 0)
+        fadeOut = try c.decodeIfPresent(Double.self, forKey: .fadeOut)
+        playlist = try c.decodeIfPresent(PlaylistDoc.self, forKey: .playlist)
+    }
+
+    /// A playlist pad of the given files.
+    init(slot: Int, title: String, playlist files: [String]) {
+        self.slot = slot
+        self.title = title
+        self.playlist = PlaylistDoc(items: files)
     }
 
     /// Smallest marker id not in use.
     var nextMarkerID: UInt64 {
         (markers.map(\.id).max() ?? 0) + 1
+    }
+}
+
+struct PlaylistDoc: Codable, Equatable {
+    var items: [String]
+    var shuffle = false
+    var autoAdvance = true
+    var crossfade: Double = 2
+
+    enum CodingKeys: String, CodingKey {
+        case items, shuffle, crossfade
+        case autoAdvance = "auto_advance"
+    }
+
+    init(items: [String]) {
+        self.items = items
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        items = try c.value(.items, or: [])
+        shuffle = try c.value(.shuffle, or: false)
+        autoAdvance = try c.value(.autoAdvance, or: true)
+        crossfade = try c.value(.crossfade, or: 2)
     }
 }
 

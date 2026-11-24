@@ -68,6 +68,8 @@ struct CueStatus: Equatable, Sendable {
     var ready = false
     /// Vamping: pressing the pad lets it continue.
     var holding = false
+    /// Playlist pads: index of the current song in the playlist.
+    var item: Int?
     var position: Double = 0
     var duration: Double = 0
 
@@ -146,14 +148,19 @@ final class EngineSession: @unchecked Sendable {
         }
     }
 
-    func setShowSettings(name: String, slots: Int, columns: Int, banks: [String]) throws {
+    func setShowSettings(
+        name: String, slots: Int, columns: Int, banks: [String], stopAllFade: Double
+    ) throws {
         struct Settings: Encodable {
             let name: String
             let slots: Int
             let columns: Int
             let banks: [String]
+            let stop_all_fade: Double
         }
-        let json = try ShowDoc.encode(Settings(name: name, slots: slots, columns: columns, banks: banks))
+        let json = try ShowDoc.encode(Settings(
+            name: name, slots: slots, columns: columns, banks: banks, stop_all_fade: stopAllFade
+        ))
         try Engine.check(sbj_session_set_show_settings_json(handle, json))
     }
 
@@ -230,6 +237,11 @@ final class EngineSession: @unchecked Sendable {
         try Engine.check(sbj_session_fire_cue(handle, UInt32(slot)))
     }
 
+    /// Playlist pad: crossfade to the next song.
+    func skip(slot: Int) throws {
+        try Engine.check(sbj_session_skip_cue(handle, UInt32(slot)))
+    }
+
     func play(slot: Int, from seconds: Double) throws {
         try Engine.check(sbj_session_play_cue_from(handle, UInt32(slot), seconds))
     }
@@ -259,6 +271,7 @@ final class EngineSession: @unchecked Sendable {
                 looping: $0.looping,
                 ready: $0.ready,
                 holding: $0.holding,
+                item: $0.item == UInt32.max ? nil : Int($0.item),
                 position: $0.position_seconds,
                 duration: $0.duration_seconds
             )
