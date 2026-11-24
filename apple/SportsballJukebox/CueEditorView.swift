@@ -163,50 +163,57 @@ private struct EditorHeader: View {
     let conflict: String?
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 16) {
-            TextField("Title", text: $draft.title)
-                .textFieldStyle(.roundedBorder)
-                .font(.title3)
-                .frame(minWidth: 200)
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline, spacing: 16) {
+                TextField("Title", text: $draft.title)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.title3)
+                    .frame(minWidth: 220, maxWidth: .infinity)
 
-            VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     Text("Key")
                     TextField("", text: hotkey)
                         .textFieldStyle(.roundedBorder)
                         .frame(width: 36)
                 }
+
+                Picker("Output", selection: $draft.output) {
+                    ForEach(Array(outputs.enumerated()), id: \.offset) { index, output in
+                        Text(output.name).tag(index)
+                    }
+                }
+                .frame(width: 200)
+
+                Picker("Colour", selection: color) {
+                    ForEach(PadColor.allCases, id: \.self) { c in
+                        Text(c.rawValue.capitalized).tag(c.rawValue)
+                    }
+                }
+                .frame(width: 150)
+            }
+
+            HStack(spacing: 20) {
+                HStack(spacing: 6) {
+                    Text("Volume")
+                    Slider(value: gain, in: 0...2)
+                        .frame(width: 140)
+                    Text(gainLabel)
+                        .font(.caption.monospacedDigit())
+                        .frame(width: 54, alignment: .leading)
+                }
+
+                Toggle("Loop", isOn: $draft.loop)
+
+                MidiField(trigger: $draft.midi, slot: draft.slot)
+
+                Spacer()
+
                 if let conflict {
-                    Text(conflict).font(.caption).foregroundStyle(.orange)
+                    Label(conflict, systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
                 }
             }
-
-            Picker("Output", selection: $draft.output) {
-                ForEach(Array(outputs.enumerated()), id: \.offset) { index, output in
-                    Text(output.name).tag(index)
-                }
-            }
-            .frame(maxWidth: 200)
-
-            HStack(spacing: 6) {
-                Text("Volume")
-                Slider(value: gain, in: 0...2)
-                    .frame(width: 110)
-                Text(gainLabel)
-                    .font(.caption.monospacedDigit())
-                    .frame(width: 54, alignment: .leading)
-            }
-
-            Toggle("Loop", isOn: $draft.loop)
-
-            MidiField(trigger: $draft.midi, slot: draft.slot)
-
-            Picker("Colour", selection: color) {
-                ForEach(PadColor.allCases, id: \.self) { c in
-                    Text(c.rawValue.capitalized).tag(c.rawValue)
-                }
-            }
-            .frame(maxWidth: 150)
         }
     }
 

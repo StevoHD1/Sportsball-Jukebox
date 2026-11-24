@@ -144,16 +144,24 @@ private struct DevicePicker: View {
                 Text(device.name).tag(device.id)
             }
             // Keep a remembered device selectable even when unplugged.
-            if let selection, !devices.contains(where: { $0.id == selection.id }) {
+            if let selection, connected == nil {
                 Text("\(selection.name.isEmpty ? selection.id : selection.name) (not connected)")
                     .tag(selection.id)
             }
         }
     }
 
+    /// The connected device the selection refers to: by id, or by name
+    /// (as the engine also matches, e.g. after moving to another Mac).
+    private var connected: AudioDevice? {
+        guard let selection else { return nil }
+        return devices.first { $0.id == selection.id }
+            ?? devices.first { !selection.name.isEmpty && $0.name == selection.name }
+    }
+
     private var idBinding: Binding<String> {
         Binding(
-            get: { selection?.id ?? "" },
+            get: { connected?.id ?? selection?.id ?? "" },
             set: { id in
                 if id.isEmpty {
                     selection = nil

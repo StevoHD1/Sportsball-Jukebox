@@ -17,6 +17,18 @@ support for several audio interfaces at once.
 Requires macOS 14.2+. See [docs/architecture.md](docs/architecture.md),
 and [docs/testing-on-mac.md](docs/testing-on-mac.md) to try it.
 
+## Screenshots
+
+Captured automatically by CI from a generated demo show
+(`scripts/make-screenshots.sh`).
+
+| | |
+|---|---|
+| ![Pads](docs/screenshots/1-pads.png) | ![Pad editor](docs/screenshots/2-pad-editor.png) |
+| Pads, banks and live playback | Pad editor: waveform timeline and markers |
+| ![Outputs](docs/screenshots/3-outputs.png) | ![Pre-game check](docs/screenshots/4-pregame-check.png) |
+| Outputs with backup devices | Pre-game check |
+
 ## Layout
 
 ```
