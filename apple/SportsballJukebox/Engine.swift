@@ -1,7 +1,8 @@
 // Swift wrapper over the Rust engine's C API (crates/sbj-ffi).
 //
 // The Rust session is internally locked and its audio runs on Core Audio's
-// own real-time thread, so these wrappers are safe to call from any thread.
+// own real-time threads, so these wrappers are safe to call from any
+// thread. Calls marked "slow" decode audio and belong off the main thread.
 
 import Foundation
 import SbjEngineC
@@ -25,17 +26,23 @@ enum Engine {
 
     static func check(_ status: SbjStatus) throws {
         if status != SBJ_STATUS_OK {
-            throw EngineFailure(code: UInt32(truncatingIfNeeded: status.rawValue), message: lastError())
+            throw EngineFailure(
+                code: UInt32(truncatingIfNeeded: status.rawValue),
+                message: lastError()
+            )
         }
     }
 
     /// Whether the compiled-in header matches the linked library's structs.
     static var abiMatches: Bool {
-        sbj_abi_check(
-            MemoryLayout<SbjDeviceInfo>.stride,
-            MemoryLayout<SbjOutputInfo>.stride,
-            MemoryLayout<SbjCueState>.stride
-        )
+        sbj_abi_check(MemoryLayout<SbjDeviceInfo>.stride, MemoryLayout<SbjCueState>.stride)
+    }
+
+    /// Takes ownership of a string returned by the engine.
+    static func take(_ pointer: UnsafeMutablePointer<CChar>?) -> String? {
+        guard let pointer else { return nil }
+        defer { sbj_string_free(pointer) }
+        return String(cString: pointer)
     }
 }
 
@@ -54,61 +61,25 @@ struct AudioDevice: Identifiable, Hashable, Sendable {
     let isDefault: Bool
 }
 
-enum OutputHealth: Sendable {
-    case running, deviceLost, failed
-}
-
-struct OutputInfo: Equatable, Sendable {
-    let deviceID: String
-    let sampleRate: Int
-    let channels: Int
-    let health: OutputHealth
-    let xruns: UInt64
-}
-
 struct CueStatus: Equatable, Sendable {
-    let assigned: Bool
-    let playing: Bool
-    let looping: Bool
-    let gain: Float
-    let position: Double
-    let duration: Double
-}
+    var assigned = false
+    var playing = false
+    var looping = false
+    var ready = false
+    var position: Double = 0
+    var duration: Double = 0
 
-/// A fully decoded sound. Decoding is slow; create these off the main thread.
-final class LoadedSound: @unchecked Sendable {
-    fileprivate let handle: OpaquePointer
-    let duration: Double
-
-    private init(handle: OpaquePointer) {
-        self.handle = handle
-        self.duration = sbj_sound_duration_seconds(handle)
-    }
-
-    deinit { sbj_sound_free(handle) }
-
-    /// Decodes `url`, converting to `targetSampleRate` (0 = keep native).
-    static func load(url: URL, targetSampleRate: Int) -> Result<LoadedSound, EngineFailure> {
-        var status = SBJ_STATUS_OK
-        let handle = url.path.withCString { path in
-            sbj_sound_load(path, UInt32(clamping: targetSampleRate), &status)
-        }
-        guard let handle else {
-            return .failure(EngineFailure(
-                code: UInt32(truncatingIfNeeded: status.rawValue),
-                message: Engine.lastError()
-            ))
-        }
-        return .success(LoadedSound(handle: handle))
+    var progress: Double {
+        duration > 0 ? min(max(position / duration, 0), 1) : 0
     }
 }
 
-/// One engine session: a bank of cues playing through one output device.
+/// One engine session: a show playing through one or more devices.
 final class EngineSession: @unchecked Sendable {
     private let handle: OpaquePointer
 
-    init(cueCount: Int) throws {
-        guard let handle = sbj_session_create(UInt32(clamping: cueCount)) else {
+    init() throws {
+        guard let handle = sbj_session_create() else {
             throw EngineFailure(code: 0, message: Engine.lastError())
         }
         self.handle = handle
@@ -116,10 +87,10 @@ final class EngineSession: @unchecked Sendable {
 
     deinit { sbj_session_destroy(handle) }
 
-    var backendName: String {
-        var buffer = [CChar](repeating: 0, count: 64)
-        _ = sbj_session_backend_name(handle, &buffer, buffer.count)
-        return buffer.withUnsafeBufferPointer { String(cString: $0.baseAddress!) }
+    // MARK: Devices and housekeeping
+
+    func openOutputs() {
+        _ = sbj_session_open_outputs(handle)
     }
 
     func poll() {
@@ -143,84 +114,112 @@ final class EngineSession: @unchecked Sendable {
         }
     }
 
-    /// Opens a device (nil = system default). May take a moment: every
-    /// assigned cue is converted to the device's sample rate.
-    func openOutput(deviceID: String?) throws {
-        let status: SbjStatus
-        if let deviceID {
-            status = deviceID.withCString { sbj_session_open_output(handle, $0) }
+    // MARK: Show
+
+    func show() -> ShowDoc? {
+        guard let json = Engine.take(sbj_session_show_json(handle)) else { return nil }
+        return try? ShowDoc.decode(json)
+    }
+
+    func status() -> SessionStatus? {
+        guard let json = Engine.take(sbj_session_status_json(handle)) else { return nil }
+        return try? SessionStatus.decode(json)
+    }
+
+    func newShow() throws {
+        try Engine.check(sbj_session_new_show(handle))
+    }
+
+    /// Slow: decodes all of the show's audio.
+    func openShow(at url: URL) throws {
+        try Engine.check(sbj_session_open_show(handle, url.path))
+    }
+
+    /// Saves to `url`, or to the show's current file if nil.
+    func saveShow(to url: URL?) throws {
+        if let url {
+            try Engine.check(sbj_session_save_show(handle, url.path))
         } else {
-            status = sbj_session_open_output(handle, nil)
+            try Engine.check(sbj_session_save_show(handle, nil))
         }
-        try Engine.check(status)
     }
 
-    func outputInfo() -> OutputInfo? {
-        var info = SbjOutputInfo()
-        guard sbj_session_output_info(handle, &info) == SBJ_STATUS_OK, info.is_open else {
-            return nil
-        }
-        let health: OutputHealth
-        if info.health == SBJ_OUTPUT_DEVICE_LOST {
-            health = .deviceLost
-        } else if info.health == SBJ_OUTPUT_FAILED {
-            health = .failed
-        } else {
-            health = .running
-        }
-        return OutputInfo(
-            deviceID: string(fromCArray: info.device_id),
-            sampleRate: Int(info.sample_rate),
-            channels: Int(info.channels),
-            health: health,
-            xruns: info.xruns
-        )
+    func setShowSettings(name: String, slots: Int, columns: Int) throws {
+        try Engine.check(sbj_session_set_show_settings(
+            handle, name, UInt32(clamping: slots), UInt32(clamping: columns)
+        ))
     }
 
-    func setSound(_ sound: LoadedSound, cue: Int) throws {
-        try Engine.check(sbj_session_set_cue_sound(handle, UInt32(cue), sound.handle))
+    func setOutputs(_ outputs: [OutputDoc]) throws {
+        try Engine.check(sbj_session_set_outputs_json(handle, try ShowDoc.encode(outputs)))
     }
 
-    func clear(cue: Int) throws {
-        try Engine.check(sbj_session_clear_cue(handle, UInt32(cue)))
+    // MARK: Cues
+
+    /// Slow if the cue uses audio that is not loaded yet.
+    func setCue(_ cue: CueDoc) throws {
+        try Engine.check(sbj_session_set_cue_json(handle, try ShowDoc.encode(cue)))
     }
 
-    func fire(cue: Int) throws {
-        try Engine.check(sbj_session_fire_cue(handle, UInt32(cue)))
+    func removeCue(slot: Int) throws {
+        try Engine.check(sbj_session_remove_cue(handle, UInt32(slot)))
     }
 
-    func stop(cue: Int, fadeSeconds: Double) throws {
-        try Engine.check(sbj_session_stop_cue(handle, UInt32(cue), fadeSeconds))
+    func moveCue(from: Int, to: Int) throws {
+        try Engine.check(sbj_session_move_cue(handle, UInt32(from), UInt32(to)))
+    }
+
+    /// Slow: decodes a file so it can be displayed. Returns its duration.
+    func loadSound(file: String) throws -> Double {
+        var duration = 0.0
+        try Engine.check(sbj_session_load_sound(handle, file, &duration))
+        return duration
+    }
+
+    /// (min, max) pairs across the whole file.
+    func waveform(file: String, buckets: Int) -> [Float]? {
+        var peaks = [Float](repeating: 0, count: buckets * 2)
+        let status = sbj_session_waveform(handle, file, UInt32(clamping: buckets), &peaks)
+        return status == SBJ_STATUS_OK ? peaks : nil
+    }
+
+    // MARK: Playback
+
+    func fire(slot: Int) throws {
+        try Engine.check(sbj_session_fire_cue(handle, UInt32(slot)))
+    }
+
+    func play(slot: Int, from seconds: Double) throws {
+        try Engine.check(sbj_session_play_cue_from(handle, UInt32(slot), seconds))
+    }
+
+    func stop(slot: Int, fadeSeconds: Double) throws {
+        try Engine.check(sbj_session_stop_cue(handle, UInt32(slot), fadeSeconds))
     }
 
     func stopAll(fadeSeconds: Double) throws {
         try Engine.check(sbj_session_stop_all(handle, fadeSeconds))
     }
 
-    func setLoop(cue: Int, looping: Bool) throws {
-        try Engine.check(sbj_session_set_cue_loop(handle, UInt32(cue), looping))
-    }
-
-    func setGain(cue: Int, gain: Float) throws {
-        try Engine.check(sbj_session_set_cue_gain(handle, UInt32(cue), gain))
-    }
-
     func setMasterGain(_ gain: Float) throws {
         try Engine.check(sbj_session_set_master_gain(handle, gain))
     }
 
-    func status(cue: Int) -> CueStatus? {
-        var state = SbjCueState()
-        guard sbj_session_cue_state(handle, UInt32(cue), &state) == SBJ_STATUS_OK else {
-            return nil
+    func cueStates(count: Int) -> [CueStatus] {
+        guard count > 0 else { return [] }
+        var raw = [SbjCueState](repeating: SbjCueState(), count: count)
+        guard sbj_session_cue_states(handle, 0, UInt32(count), &raw) == SBJ_STATUS_OK else {
+            return Array(repeating: CueStatus(), count: count)
         }
-        return CueStatus(
-            assigned: state.assigned,
-            playing: state.playing,
-            looping: state.looping,
-            gain: state.gain,
-            position: state.position_seconds,
-            duration: state.duration_seconds
-        )
+        return raw.map {
+            CueStatus(
+                assigned: $0.assigned,
+                playing: $0.playing,
+                looping: $0.looping,
+                ready: $0.ready,
+                position: $0.position_seconds,
+                duration: $0.duration_seconds
+            )
+        }
     }
 }

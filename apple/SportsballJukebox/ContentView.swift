@@ -3,48 +3,56 @@ import SwiftUI
 struct ContentView: View {
     @EnvironmentObject private var model: AppModel
 
-    private var columns: [GridItem] {
-        Array(repeating: GridItem(.flexible(), spacing: 10), count: AppModel.columns)
-    }
-
     var body: some View {
         VStack(spacing: 0) {
             HeaderBar()
             Divider()
-            if let banner = outputProblem {
-                Label(banner, systemImage: "exclamationmark.triangle.fill")
-                    .font(.headline)
-                    .foregroundStyle(.white)
-                    .frame(maxWidth: .infinity)
-                    .padding(8)
-                    .background(Color.red)
-            }
+            OutputBanners()
+            NoticeToasts()
             ScrollView {
-                LazyVGrid(columns: columns, spacing: 10) {
-                    ForEach(model.cues) { cue in
-                        CueButton(cue: cue)
-                    }
-                }
-                .padding(16)
+                PadGrid()
+                    .padding(16)
             }
         }
         .frame(minWidth: 820, minHeight: 480)
+        .navigationTitle(model.windowTitle)
+        .overlay {
+            if model.isLoadingShow {
+                ProgressView("Loading show…")
+                    .padding(24)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+            }
+        }
         .alert(item: $model.alert) { alert in
             Alert(title: Text(alert.title), message: Text(alert.message))
         }
+        .sheet(item: $model.editing) { target in
+            CueEditorView(slot: target.id)
+                .environmentObject(model)
+        }
+        .sheet(isPresented: $model.showingOutputs) {
+            OutputsView()
+                .environmentObject(model)
+        }
+        .sheet(isPresented: $model.showingSettings) {
+            ShowSettingsView()
+                .environmentObject(model)
+        }
     }
+}
 
-    private var outputProblem: String? {
-        if model.isOpeningOutput { return nil }
-        switch model.output?.health {
-        case .none:
-            return "No audio output. Choose a device above."
-        case .some(.deviceLost):
-            return "Audio device disconnected. Choose another output above."
-        case .some(.failed):
-            return "Audio output failed. Re-select the device above."
-        case .some(.running):
-            return nil
+private struct PadGrid: View {
+    @EnvironmentObject private var model: AppModel
+
+    var body: some View {
+        let columns = Array(
+            repeating: GridItem(.flexible(), spacing: 10),
+            count: max(model.show.columns, 1)
+        )
+        LazyVGrid(columns: columns, spacing: 10) {
+            ForEach(0..<model.show.slots, id: \.self) { slot in
+                CueButton(slot: slot)
+            }
         }
     }
 }
@@ -54,23 +62,16 @@ private struct HeaderBar: View {
 
     var body: some View {
         HStack(spacing: 14) {
-            Picker("Output", selection: deviceSelection) {
-                Text("System Default").tag("")
-                ForEach(model.devices) { device in
-                    Text(device.name).tag(device.id)
-                }
-            }
-            .frame(maxWidth: 340)
-            .disabled(model.isOpeningOutput)
-
             Button {
-                model.refreshDevices()
+                model.showingOutputs = true
             } label: {
-                Image(systemName: "arrow.clockwise")
+                Label("Outputs", systemImage: "hifispeaker.2")
             }
-            .help("Rescan audio devices")
+            .help("Choose audio interfaces and backups")
 
-            OutputStatus()
+            ForEach(Array((model.status?.outputs ?? []).enumerated()), id: \.offset) { _, output in
+                OutputBadge(output: output)
+            }
 
             Spacer()
 
@@ -96,17 +97,10 @@ private struct HeaderBar: View {
         .padding(.vertical, 10)
         .background(.bar)
     }
-
-    private var deviceSelection: Binding<String> {
-        Binding(
-            get: { model.selectedDeviceID ?? "" },
-            set: { model.selectDevice($0.isEmpty ? nil : $0) }
-        )
-    }
 }
 
-private struct OutputStatus: View {
-    @EnvironmentObject private var model: AppModel
+private struct OutputBadge: View {
+    let output: OutputState
 
     var body: some View {
         HStack(spacing: 6) {
@@ -116,25 +110,63 @@ private struct OutputStatus: View {
             Text(text)
                 .font(.callout.monospacedDigit())
                 .foregroundStyle(.secondary)
+                .lineLimit(1)
         }
-        .help("Audio output status")
+        .help(output.error ?? (output.deviceName ?? ""))
     }
 
     private var color: Color {
-        if model.isOpeningOutput { return .yellow }
-        switch model.output?.health {
-        case .some(.running): return (model.output?.xruns ?? 0) > 0 ? .orange : .green
+        switch output.status {
+        case "running": return output.xruns > 0 ? .orange : .green
+        case "on_backup": return .orange
         default: return .red
         }
     }
 
     private var text: String {
-        if model.isOpeningOutput { return "Opening…" }
-        guard let output = model.output else { return "No output" }
-        var text = String(format: "%.1f kHz · %d ch", Double(output.sampleRate) / 1000, output.channels)
+        guard output.isUp else { return "\(output.name): offline" }
+        var text = "\(output.name): \(output.deviceName ?? "?")"
+        if output.status == "on_backup" {
+            text += " (backup)"
+        }
         if output.xruns > 0 {
             text += " · \(output.xruns) glitch\(output.xruns == 1 ? "" : "es")"
         }
         return text
+    }
+}
+
+/// Persistent red banners for outputs with no device.
+private struct OutputBanners: View {
+    @EnvironmentObject private var model: AppModel
+
+    var body: some View {
+        let down = (model.status?.outputs ?? []).filter { !$0.isUp }
+        ForEach(Array(down.enumerated()), id: \.offset) { _, output in
+            Label(
+                "Output \"\(output.name)\" has no audio device. Its pads cannot play. Retrying…",
+                systemImage: "exclamationmark.triangle.fill"
+            )
+            .font(.headline)
+            .foregroundStyle(.white)
+            .frame(maxWidth: .infinity)
+            .padding(8)
+            .background(Color.red)
+        }
+    }
+}
+
+/// Short-lived messages such as "switched to backup device".
+private struct NoticeToasts: View {
+    @EnvironmentObject private var model: AppModel
+
+    var body: some View {
+        ForEach(Array(model.notices.enumerated()), id: \.offset) { _, notice in
+            Label(notice, systemImage: "info.circle.fill")
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 6)
+                .background(Color.orange.opacity(0.25))
+        }
     }
 }

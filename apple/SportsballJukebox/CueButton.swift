@@ -1,128 +1,207 @@
 import SwiftUI
 
-/// One pad in the cue grid. Click (or press its key) to fire; drop an audio
-/// file on it to assign; right-click for more.
+/// Pad colours, by the names stored in the show file.
+enum PadColor: String, CaseIterable {
+    case blue, green, orange, red, purple, pink, teal, gray
+
+    var color: Color {
+        switch self {
+        case .blue: return .blue
+        case .green: return .green
+        case .orange: return .orange
+        case .red: return .red
+        case .purple: return .purple
+        case .pink: return .pink
+        case .teal: return .teal
+        case .gray: return .gray
+        }
+    }
+
+    static func color(named name: String?) -> Color {
+        name.flatMap(PadColor.init(rawValue:))?.color ?? .accentColor
+    }
+}
+
+/// Dragging a pad onto another moves it; this URL scheme marks pad drags
+/// so the same drop target also accepts audio files from Finder.
+private let padScheme = "sbjpad"
+
+/// One pad in the grid. Click (or press its key) to fire; drop an audio
+/// file on it to assign; drag it onto another pad to swap; right-click for
+/// more.
 struct CueButton: View {
     @EnvironmentObject private var model: AppModel
-    let cue: Cue
+    let slot: Int
     @State private var isDropTarget = false
 
     private let shape = RoundedRectangle(cornerRadius: 10, style: .continuous)
 
+    private var cue: CueDoc? { model.show.cue(at: slot) }
+    private var state: CueStatus { model.state(of: slot) }
+    private var problems: [String] { model.problems(for: slot) }
+    private var isBusy: Bool { model.busySlots.contains(slot) }
+
     var body: some View {
         Button {
-            model.trigger(cue.id)
+            model.trigger(slot)
         } label: {
-            pad
+            PadFace(
+                cue: cue,
+                state: state,
+                hasProblems: !problems.isEmpty,
+                isBusy: isBusy
+            )
+            .overlay(shape.strokeBorder(borderColor, lineWidth: isDropTarget ? 3 : 1))
+            .contentShape(shape)
         }
         .buttonStyle(.plain)
-        .modifier(Hotkey(key: cue.hotkey))
+        .modifier(Hotkey(key: cue?.hotkey))
         .contextMenu { menu }
+        .draggable(URL(string: "\(padScheme)://\(slot)")!) {
+            Text(cue?.title ?? "Pad \(slot + 1)")
+                .padding(8)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 6))
+        }
         .dropDestination(for: URL.self) { urls, _ in
             guard let url = urls.first else { return false }
-            model.loadSound(url: url, into: cue.id)
+            if url.scheme == padScheme, let from = Int(url.host ?? "") {
+                model.move(from: from, to: slot)
+            } else if url.isFileURL {
+                model.assignSound(url: url, to: slot)
+            } else {
+                return false
+            }
             return true
         } isTargeted: { isDropTarget = $0 }
-        .help(cue.title ?? "Click or drop an audio file to assign a sound")
+        .help(helpText)
     }
 
-    private var pad: some View {
+    private var borderColor: Color {
+        if isDropTarget { return .accentColor }
+        if !problems.isEmpty { return .orange }
+        return state.playing ? .green : Color.secondary.opacity(0.25)
+    }
+
+    private var helpText: String {
+        guard let cue else { return "Click or drop an audio file to assign a sound" }
+        return ([cue.title] + problems).joined(separator: "\n")
+    }
+
+    @ViewBuilder
+    private var menu: some View {
+        if let cue {
+            Button("Edit Pad…") { model.editing = EditTarget(id: slot) }
+            Button("Replace Sound…") { model.chooseSound(for: slot) }
+            Toggle("Loop", isOn: Binding(
+                get: { cue.loop },
+                set: { model.setLoop(slot, $0) }
+            ))
+            Divider()
+            Button("Stop") { model.stop(slot, fade: false) }
+            Button("Fade Out") { model.stop(slot, fade: true) }
+            Divider()
+            Button("Clear Pad", role: .destructive) { model.clear(slot) }
+        } else {
+            Button("Load Sound…") { model.chooseSound(for: slot) }
+        }
+    }
+}
+
+private struct PadFace: View {
+    let cue: CueDoc?
+    let state: CueStatus
+    let hasProblems: Bool
+    let isBusy: Bool
+
+    private let shape = RoundedRectangle(cornerRadius: 10, style: .continuous)
+
+    var body: some View {
         ZStack(alignment: .leading) {
             shape.fill(background)
 
-            // Playback progress.
             GeometryReader { geometry in
                 Rectangle()
                     .fill(Color.white.opacity(0.22))
-                    .frame(width: geometry.size.width * cue.progress)
+                    .frame(width: geometry.size.width * state.progress)
             }
             .clipShape(shape)
 
             VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 6) {
-                    if let key = cue.hotkey {
-                        Text(String(key).uppercased())
-                            .font(.caption.monospaced().weight(.semibold))
-                            .padding(.horizontal, 5)
-                            .padding(.vertical, 1)
-                            .background(Color.black.opacity(0.25), in: RoundedRectangle(cornerRadius: 4))
-                    }
-                    Spacer(minLength: 0)
-                    if cue.looping {
-                        Image(systemName: "repeat")
-                    }
-                    if cue.isLoading {
-                        ProgressView().controlSize(.small)
-                    }
-                }
+                topRow
                 Spacer(minLength: 0)
-                Text(cue.title ?? "Empty")
+                Text(cue?.title ?? "Empty")
                     .font(.headline)
                     .lineLimit(2)
-                    .opacity(cue.isAssigned ? 1 : 0.5)
-                if cue.isAssigned {
+                    .opacity(cue == nil ? 0.5 : 1)
+                if cue != nil {
                     Text(timeText)
                         .font(.caption.monospacedDigit())
                         .opacity(0.85)
                 }
             }
-            .foregroundStyle(cue.isAssigned ? Color.white : Color.secondary)
+            .foregroundStyle(cue == nil ? Color.secondary : Color.white)
             .padding(10)
         }
         .frame(height: 100)
-        .overlay(shape.strokeBorder(borderColor, lineWidth: isDropTarget ? 3 : 1))
-        .contentShape(shape)
-        .animation(.easeOut(duration: 0.12), value: cue.playing)
+        .animation(.easeOut(duration: 0.12), value: state.playing)
+    }
+
+    private var topRow: some View {
+        HStack(spacing: 6) {
+            if let key = cue?.hotkey, !key.isEmpty {
+                Text(key.uppercased())
+                    .font(.caption.monospaced().weight(.semibold))
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 1)
+                    .background(Color.black.opacity(0.25), in: RoundedRectangle(cornerRadius: 4))
+            }
+            Spacer(minLength: 0)
+            if hasProblems {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.yellow)
+            }
+            if let cue, !cue.markers.isEmpty {
+                Image(systemName: "flag.fill")
+            }
+            if cue?.loop == true {
+                Image(systemName: "repeat")
+            }
+            if isBusy {
+                ProgressView().controlSize(.small)
+            }
+        }
     }
 
     private var background: Color {
-        if !cue.isAssigned { return Color.secondary.opacity(0.12) }
-        return cue.playing ? Color.green.opacity(0.85) : Color.accentColor.opacity(0.75)
-    }
-
-    private var borderColor: Color {
-        if isDropTarget { return .accentColor }
-        return cue.playing ? .green : Color.secondary.opacity(0.25)
+        guard let cue else { return Color.secondary.opacity(0.12) }
+        if state.playing { return Color.green.opacity(0.85) }
+        let base = PadColor.color(named: cue.color)
+        return state.ready ? base.opacity(0.75) : base.opacity(0.35)
     }
 
     private var timeText: String {
-        if cue.playing {
-            return "\(format(cue.position)) / -\(format(max(cue.duration - cue.position, 0)))"
+        if state.playing {
+            return "\(formatTime(state.position)) / -\(formatTime(max(state.duration - state.position, 0)))"
         }
-        return format(cue.duration)
-    }
-
-    private func format(_ seconds: Double) -> String {
-        let total = Int(seconds.rounded(.down))
-        let tenths = Int((seconds - Double(total)) * 10)
-        return String(format: "%d:%02d.%d", total / 60, total % 60, tenths)
-    }
-
-    @ViewBuilder
-    private var menu: some View {
-        Button("Load Sound…") { model.chooseSound(for: cue.id) }
-        if cue.isAssigned {
-            Toggle("Loop", isOn: Binding(
-                get: { cue.looping },
-                set: { model.setLoop(cue.id, $0) }
-            ))
-            Divider()
-            Button("Stop") { model.stop(cue.id, fade: false) }
-            Button("Fade Out") { model.stop(cue.id, fade: true) }
-            Divider()
-            Button("Clear", role: .destructive) { model.clear(cue.id) }
-        }
+        return state.ready ? formatTime(state.duration) : "Not ready"
     }
 }
 
-/// Binds a bare key (no modifiers) to the cue.
+func formatTime(_ seconds: Double) -> String {
+    let clamped = max(seconds, 0)
+    let total = Int(clamped.rounded(.down))
+    let tenths = Int((clamped - Double(total)) * 10)
+    return String(format: "%d:%02d.%d", total / 60, total % 60, tenths)
+}
+
+/// Binds a bare key (no modifiers) to the pad.
 private struct Hotkey: ViewModifier {
-    let key: Character?
+    let key: String?
 
     @ViewBuilder
     func body(content: Content) -> some View {
-        if let key {
-            content.keyboardShortcut(KeyEquivalent(key), modifiers: [])
+        if let character = key?.lowercased().first {
+            content.keyboardShortcut(KeyEquivalent(character), modifiers: [])
         } else {
             content
         }
