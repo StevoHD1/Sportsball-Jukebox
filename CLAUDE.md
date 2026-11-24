@@ -14,11 +14,18 @@ Read `docs/architecture.md` before changing the engine.
   behaviour needs an offline-render test in `tests/markers.rs` run across
   `BLOCK_SIZES`.
 - **C ABI.** `crates/sbj-ffi/include/sportsball_jukebox.h` is hand-written.
-  Update it with every exported-function change; `tests/smoke.c` checks it.
-  Every exported function must be panic-safe and null-tolerant.
+  Update it with every exported-function or struct change; `tests/smoke.c`
+  checks it, and `sbj_abi_check` guards struct sizes at app launch. Every
+  exported function must be panic-safe and null-tolerant, and set
+  `sbj_last_error_message` on failure.
+- **Swift can't be compiled here.** `apple/` only builds on macOS CI (Run
+  workflow on the branch). Keep Swift conservative (Swift 5 mode,
+  macOS 14.2 APIs) and lint the Rust side for macOS with
+  `cargo clippy --workspace --all-targets --target aarch64-apple-darwin`.
 
 ## Before committing
 
 ```sh
 cargo fmt --all && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace
+cargo clippy --workspace --all-targets --target aarch64-apple-darwin -- -D warnings
 ```

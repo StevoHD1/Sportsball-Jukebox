@@ -1,6 +1,6 @@
 # Sportsball Jukebox: Architecture
 
-Status: Phase 0 (engine foundations). Last updated 2026-11-24.
+Status: Phase 1 (first sound on a Mac). Last updated 2026-11-24.
 
 ## Goals, in priority order
 
@@ -17,10 +17,15 @@ Status: Phase 0 (engine foundations). Last updated 2026-11-24.
 
 ```
 ┌──────────────────────────────────────────────────────────┐
-│ macOS app — Swift (SwiftUI + AppKit)                     │
+│ macOS app — Swift (SwiftUI + AppKit)        apple/       │
 │  cue grid, timeline editor, marker editor, device setup  │
 └───────────────▲──────────────────────────────────────────┘
                 │ C ABI (crates/sbj-ffi, include/sportsball_jukebox.h)
+┌───────────────┴──────────────────────────────────────────┐
+│ sbj-session: cues ↔ players, output device, firing       │
+│ sbj-media:   decode files, resample to device rate       │
+└───────────────▲──────────────────────────────────────────┘
+                │
 ┌───────────────┴──────────────────────────────────────────┐
 │ sbj-engine (Rust, platform-independent)                  │
 │                                                          │
@@ -32,15 +37,17 @@ Status: Phase 0 (engine foundations). Last updated 2026-11-24.
 ┌───────────────┴──────────────────────────────────────────┐
 │ sbj-backend                                              │
 │  trait AudioBackend · OfflineBackend (tests)             │
-│  CoreAudioBackend (Phase 1) · WASAPI/ASIO (maybe later)  │
+│  SystemBackend: Core Audio via cpal (WASAPI if Windows)  │
 └──────────────────────────────────────────────────────────┘
 ```
 
 | Crate | Role |
 |---|---|
-| `sbj-engine` | Timeline model, marker actions, mixing, fades, transport. No I/O, no platform code. |
-| `sbj-backend` | Device abstraction. Opens an output on a device and calls a render callback on the real-time thread. |
-| `sbj-ffi` | C ABI for the Swift app. Every call is panic-safe and tolerates null pointers. |
+| `sbj-engine` | Timeline model, marker actions, players, mixing, fades, transport. No I/O, no platform code. |
+| `sbj-backend` | Device abstraction. `SystemBackend` uses cpal (Core Audio on macOS); `OfflineBackend` for tests. Reports device loss and glitches (xruns). |
+| `sbj-media` | Decodes WAV/AIFF/CAF/FLAC/MP3/AAC/ALAC/Vorbis (Symphonia) and converts sample rates (rubato FFT resampler). Control side only. |
+| `sbj-session` | The app model: a bank of cues, one output device, fire/stop/loop/gain. Generic over the backend, so it is tested end-to-end offline. |
+| `sbj-ffi` | C ABI for the Swift app. Every call is panic-safe, tolerates null pointers, and reports errors via `sbj_last_error_message`. |
 
 ## One engine per audio interface
 
@@ -60,6 +67,15 @@ aligned needs continuous resampling. Without that requirement:
 
 If sync is needed later, macOS aggregate devices (which apply drift
 correction) are the first thing to try, since they need no engine changes.
+
+### Players
+
+Each engine has a fixed number of **players** (64 by default; the session
+uses one per cue). A player holds one timeline with its own transport,
+gain and fade, so any number of cues can overlap. Players render into a
+scratch buffer and are summed, then the master gain is applied. The
+player count is fixed when the engine is created, so the audio thread never
+allocates.
 
 ## Threading model and real-time rules
 
@@ -81,11 +97,13 @@ any.
 
 ### Communication
 
-- **Commands** (control → audio): `SetTimeline`, `Play`, `Pause`, `Stop`,
-  `Seek`, `SetMasterGain`, `FadeOutAndStop`. Drained at the start of each
-  audio block.
+- **Commands** (control → audio): per player `Load`, `Unload`, `Play`,
+  `Pause`, `Stop`, `Seek`, `Restart`, `SetPlayerGain`, `FadeOutAndStop`;
+  global `StopAll { fade }` and `SetMasterGain`. Drained at the start of
+  each audio block.
 - **Events** (audio → control): `MarkerReached`, `Started`, `Paused`,
-  `Stopped`, `Seeked`, `ReachedEnd`, `TimelineLoaded`. `Copy` types, so
+  `Stopped`, `Seeked`, `ReachedEnd`, `TimelineLoaded`, each tagged with
+  its player. `Copy` types, so
   sending one never allocates. If the queue is full the event is dropped and
   counted (`dropped_events`) rather than blocking.
 - **Shared atomics**: the playhead position and playing state, for the UI to
@@ -103,7 +121,9 @@ precise, testable statement. The UI converts to and from seconds or
 musical time for display.
 
 - **AudioBuffer**: decoded, interleaved `f32` audio, shared by `Arc`. It is
-  resampled to the engine rate when loaded (Phase 1), never during playback.
+  resampled to the device's rate when loaded (`sbj-media`, on a background
+  thread), never during playback. The device keeps its own sample rate;
+  we never change it, since other apps share the device.
 - **Clip**: a region of a buffer placed on the timeline, with gain and
   fade-in and fade-out (linear or equal-power).
 - **Marker**: a position, a stable `MarkerId` for the UI, and an action.
@@ -178,38 +198,45 @@ always finishes, even for a jump that targets itself.
 ## Build and distribution
 
 - Rust toolchain pinned in `rust-toolchain.toml`.
+- **Minimum macOS: 14.2 (Sonoma)**, required by cpal's Core Audio backend.
+- The Mac app lives in `apple/`. Its Xcode project is generated from
+  `apple/project.yml` by XcodeGen and is not committed. A pre-build phase
+  runs `scripts/build-rust-apple.sh`, which builds the engine as
+  `target/apple/libsbj_ffi.a`. Swift imports the C header through the
+  `SbjEngineC` module map, and the app checks `sbj_abi_check` at launch.
 - CI (`.github/workflows/ci.yml`): Linux runs fmt, clippy, tests and the C
-  smoke test on every push. macOS runs tests and builds a universal
-  (arm64 + x86_64) `libsbj_ffi.a` plus header, uploaded as a build artifact.
-  It runs only on PRs, `main` and manual runs, because macOS minutes cost
-  10× on private repos.
-- No Apple Developer account yet, so builds are unsigned. On the test Mac,
-  right-click → Open the first time, or run
-  `xattr -dr com.apple.quarantine SportsballJukebox.app`.
+  smoke test on every push. macOS runs tests, then builds a universal
+  (arm64 + x86_64) ad-hoc-signed `Sportsball Jukebox.app`, zipped as a
+  downloadable artifact. It runs only on PRs, `main` and manual runs,
+  because macOS minutes cost 10× on private repos.
+- No Apple Developer account yet, so builds are ad-hoc signed, not
+  notarized. See `docs/testing-on-mac.md` for opening them.
 
 ## Roadmap
 
-**Phase 0 — Foundations (done)**
+**Phase 0: Foundations (done)**
 Engine core, marker actions, real-time safety test, offline backend, C ABI,
 CI.
 
-**Phase 1 — First sound on a Mac**
-- File decoding (Symphonia: WAV/AIFF/MP3/AAC/FLAC) and resampling at load
-  time.
-- `CoreAudioBackend`: device enumeration by UID and one output stream per
-  device.
-- Xcode project: SwiftUI shell linking `libsbj_ffi.a`, with a cue grid that
-  fires preloaded sounds.
-- CI builds an unsigned `.app` as a downloadable artifact.
-- First test session on the borrowed Mac: latency, glitches, device
-  switching.
+**Phase 1: First sound on a Mac (built; awaiting Mac testing)**
+- Multiple players per engine, so cues overlap. Restart, per-player gain,
+  Stop All with fade.
+- File decoding (Symphonia) and high-quality resampling at load time.
+- Core Audio output through cpal: device list by persistent id, one stream
+  per device, device-loss and glitch reporting.
+- Session layer and C API for the app.
+- SwiftUI app: 24-cue grid with keyboard hotkeys, drag-and-drop or click
+  to load, progress display, loop/stop/fade/clear per cue, output device
+  picker, master volume, Stop All (Esc), disconnect banner.
+- CI builds the `.app`.
+- Next: first test session on the borrowed Mac (`docs/testing-on-mac.md`).
 
-**Phase 2 — Show building**
+**Phase 2: Show building**
 Timeline editor with waveforms, marker/action editor, show file format
-(versioned, autosaved), hotkeys, multiple interfaces with routing and
-failover.
+(versioned, autosaved), several interfaces at once (one engine each) with
+routing and failover, configurable hotkeys.
 
-**Phase 3 — Live operation and polish**
-MIDI/OSC/Stream Deck triggers, hot-cue banks, a "panic" fade-all control,
-pre-flight checks, accessibility, performance profiling, signing and
+**Phase 3: Live operation and polish**
+MIDI/OSC/Stream Deck triggers, hot-cue banks, pre-flight checks,
+crossfades on jumps, accessibility, performance profiling, signing and
 notarization.

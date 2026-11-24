@@ -28,7 +28,7 @@ jobs:
       - name: C API smoke test against the public header
         run: |
           cargo build -p sbj-ffi
-          cc -Wall -Wextra -Werror crates/sbj-ffi/tests/smoke.c \
+          cc -std=c11 -Wall -Wextra -Werror crates/sbj-ffi/tests/smoke.c \
             -I crates/sbj-ffi/include target/debug/libsbj_ffi.a \
             -lpthread -ldl -lm -o smoke
           ./smoke
@@ -36,34 +36,60 @@ jobs:
   # macOS minutes cost 10x on private repos, so this runs only for pull
   # requests, pushes to main, and manual runs (Actions tab -> Run workflow).
   macos:
-    name: Test and build (macOS)
+    name: Test and build app (macOS)
     needs: linux
     if: github.event_name != 'push' || github.ref == 'refs/heads/main'
-    runs-on: macos-latest
-    timeout-minutes: 20
+    runs-on: macos-15
+    timeout-minutes: 30
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "14.2"
     steps:
       - uses: actions/checkout@v4
       - name: Install toolchain from rust-toolchain.toml
         run: rustup show active-toolchain || rustup toolchain install
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace
-      - name: Build universal static library
-        run: |
-          cargo build --release -p sbj-ffi --target aarch64-apple-darwin
-          cargo build --release -p sbj-ffi --target x86_64-apple-darwin
-          mkdir -p dist/include
-          lipo -create \
-            target/aarch64-apple-darwin/release/libsbj_ffi.a \
-            target/x86_64-apple-darwin/release/libsbj_ffi.a \
-            -output dist/libsbj_ffi.a
-          cp crates/sbj-ffi/include/sportsball_jukebox.h dist/include/
+      - name: Build universal engine library
+        run: scripts/build-rust-apple.sh
       - name: C API smoke test (native)
         run: |
-          cc -Wall -Wextra -Werror crates/sbj-ffi/tests/smoke.c \
-            -I dist/include dist/libsbj_ffi.a -o smoke
+          cc -std=c11 -Wall -Wextra -Werror crates/sbj-ffi/tests/smoke.c \
+            -I crates/sbj-ffi/include target/apple/libsbj_ffi.a \
+            -framework AudioToolbox -framework CoreAudio -framework CoreFoundation \
+            -framework Foundation -lobjc -liconv -o smoke
           ./smoke
+      - name: Generate Xcode project
+        run: |
+          brew install xcodegen
+          cd apple && xcodegen generate
+      - name: Build app (universal, ad-hoc signed)
+        run: |
+          xcodebuild -project apple/SportsballJukebox.xcodeproj \
+            -scheme SportsballJukebox -configuration Release \
+            -derivedDataPath apple/build \
+            ARCHS="arm64 x86_64" ONLY_ACTIVE_ARCH=NO \
+            build > xcodebuild.log 2>&1 || {
+              grep -E "error:" xcodebuild.log | head -100
+              tail -40 xcodebuild.log
+              exit 1
+            }
+          grep -E "warning:" xcodebuild.log | sort -u | head -50 || true
+          tail -3 xcodebuild.log
+      - name: Package app
+        run: |
+          app="apple/build/Build/Products/Release/Sportsball Jukebox.app"
+          lipo -info "$app/Contents/MacOS/Sportsball Jukebox"
+          codesign --verify --verbose "$app"
+          mkdir -p dist
+          ditto -c -k --keepParent "$app" "dist/Sportsball-Jukebox-${GITHUB_SHA::7}.zip"
       - uses: actions/upload-artifact@v4
         with:
-          name: sbj-engine-macos-universal
-          path: dist/
-          retention-days: 14
+          name: Sportsball-Jukebox-macOS
+          path: dist/*.zip
+          retention-days: 30
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: xcodebuild-log
+          path: xcodebuild.log
+          retention-days: 7

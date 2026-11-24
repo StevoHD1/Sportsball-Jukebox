@@ -1,0 +1,17 @@
+[package]
+name = "sbj-media"
+description = "Audio file decoding and sample-rate conversion for Sportsball Jukebox (control thread only)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+sbj-engine.workspace = true
+symphonia = { version = "0.6.1", default-features = false, features = [
+    "opt-simd", "pcm", "adpcm", "wav", "aiff", "caf", "flac", "mp3", "aac", "alac", "isomp4", "ogg", "vorbis",
+] }
+rubato = "5.1.0"
+
+[lints]
+workspace = true

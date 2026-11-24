@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use sbj_backend::offline::{OFFLINE_DEVICE, OfflineBackend};
 use sbj_backend::{AudioBackend, DeviceId, StreamConfig};
-use sbj_engine::{AudioBuffer, Clip, Engine, EngineConfig, Timeline};
+use sbj_engine::{AudioBuffer, Clip, Engine, EngineConfig, PlayerId, Timeline};
 
 #[test]
 fn engine_renders_through_offline_backend() {
@@ -16,17 +16,17 @@ fn engine_renders_through_offline_backend() {
         .clip(Clip::new(buffer))
         .build()
         .unwrap();
-    controller.load_timeline(timeline).unwrap();
-    controller.play().unwrap();
+    controller.load(PlayerId(0), timeline).unwrap();
+    controller.play(PlayerId(0)).unwrap();
 
-    let backend = OfflineBackend;
+    let backend = OfflineBackend::default();
     let device = &backend.output_devices().unwrap()[0];
     assert_eq!(device.id, DeviceId(OFFLINE_DEVICE.into()));
 
     let config = StreamConfig {
         sample_rate: rate,
         channels: 2,
-        buffer_frames: 256,
+        buffer_frames: Some(256),
     };
     let mut stream = backend
         .open_output(
@@ -40,5 +40,5 @@ fn engine_renders_through_offline_backend() {
     assert_eq!(audio.len(), 2400);
     assert!(audio[..2000].iter().all(|&s| s == 0.5));
     assert!(audio[2000..].iter().all(|&s| s == 0.0));
-    assert!(!controller.is_playing());
+    assert!(!controller.is_playing(PlayerId(0)));
 }

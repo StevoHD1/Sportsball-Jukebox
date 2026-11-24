@@ -7,6 +7,12 @@ use rtrb::{Consumer, Producer, RingBuffer};
 use crate::render::{LoadedTimeline, Renderer};
 use crate::{MarkerId, Samples, Timeline};
 
+/// Identifies one of an engine's players. Each player holds one timeline
+/// with its own transport, gain and fades; all players are mixed together.
+/// A sound-board cue maps to one player.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct PlayerId(pub u32);
+
 /// Settings for one engine instance. Each audio interface gets its own
 /// engine, running at that interface's sample rate and channel count.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -15,11 +21,17 @@ pub struct EngineConfig {
     /// Output channels, interleaved in the buffers passed to
     /// [`Renderer::process`].
     pub channels: u16,
+    /// Number of players (simultaneous timelines). Fixed for the life of
+    /// the engine so the audio thread never allocates.
+    pub players: u32,
+    /// Largest block mixed in one pass. Bigger device buffers are split
+    /// into blocks of this size; it only sizes a scratch buffer.
+    pub max_block_frames: usize,
     /// Capacity of the controller → renderer command queue.
     pub command_capacity: usize,
     /// Capacity of the renderer → controller event queue.
     pub event_capacity: usize,
-    /// Length of the ramp used to smooth master gain changes, in frames.
+    /// Length of the ramp used to smooth gain changes, in frames.
     pub gain_ramp_frames: u32,
 }
 
@@ -28,6 +40,8 @@ impl EngineConfig {
         Self {
             sample_rate,
             channels,
+            players: 64,
+            max_block_frames: 1024,
             command_capacity: 1024,
             event_capacity: 4096,
             // 10 ms: fast enough to feel instant, slow enough not to click.
@@ -48,6 +62,8 @@ pub enum EngineError {
         engine: u32,
         timeline: u32,
     },
+    /// No such player in this engine.
+    InvalidPlayer(PlayerId),
 }
 
 impl fmt::Display for EngineError {
@@ -59,6 +75,7 @@ impl fmt::Display for EngineError {
                 f,
                 "timeline is {timeline} Hz but the engine runs at {engine} Hz"
             ),
+            Self::InvalidPlayer(p) => write!(f, "player {} does not exist", p.0),
         }
     }
 }
@@ -69,35 +86,49 @@ impl std::error::Error for EngineError {}
 /// them never allocates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Event {
-    TimelineLoaded,
+    TimelineLoaded {
+        player: PlayerId,
+    },
     Started {
+        player: PlayerId,
         position: Samples,
     },
     Paused {
+        player: PlayerId,
         position: Samples,
     },
-    Stopped,
+    Stopped {
+        player: PlayerId,
+    },
     Seeked {
+        player: PlayerId,
         position: Samples,
     },
     /// The playhead reached a marker. Fired for every marker reached,
     /// including loops that have finished repeating and pass through.
     MarkerReached {
+        player: PlayerId,
         marker: MarkerId,
         position: Samples,
     },
     /// The playhead ran off the end of the timeline and stopped.
-    ReachedEnd,
+    ReachedEnd {
+        player: PlayerId,
+    },
 }
 
 pub(crate) enum Command {
-    SetTimeline(Box<LoadedTimeline>),
-    Play,
-    Pause,
-    Stop,
-    Seek(Samples),
+    Load(PlayerId, Box<LoadedTimeline>),
+    Unload(PlayerId),
+    Play(PlayerId),
+    Pause(PlayerId),
+    Stop(PlayerId),
+    Seek(PlayerId, Samples),
+    Restart(PlayerId),
+    SetPlayerGain(PlayerId, f32),
+    FadeOutAndStop(PlayerId, Samples),
+    StopAll { fade: Samples },
     SetMasterGain(f32),
-    FadeOutAndStop(Samples),
 }
 
 /// Heap objects the audio thread is done with, returned to be freed off the
@@ -108,11 +139,16 @@ pub(crate) enum Garbage {
     Timeline(Box<LoadedTimeline>),
 }
 
-/// State the audio thread publishes for the UI to read without messaging.
 #[derive(Debug, Default)]
-pub(crate) struct Shared {
+pub(crate) struct PlayerShared {
     pub position: AtomicU64,
     pub playing: AtomicBool,
+}
+
+/// State the audio thread publishes for the UI to read without messaging.
+#[derive(Debug)]
+pub(crate) struct Shared {
+    pub players: Box<[PlayerShared]>,
     pub dropped_events: AtomicU64,
     pub leaked_garbage: AtomicU64,
 }
@@ -130,6 +166,11 @@ impl Engine {
         if config.channels == 0 {
             return Err(EngineError::InvalidConfig("channels must be non-zero"));
         }
+        if config.players == 0 || config.max_block_frames == 0 {
+            return Err(EngineError::InvalidConfig(
+                "players and block size must be non-zero",
+            ));
+        }
         if config.command_capacity == 0 || config.event_capacity == 0 {
             return Err(EngineError::InvalidConfig(
                 "queue capacities must be non-zero",
@@ -137,11 +178,17 @@ impl Engine {
         }
         let (cmd_tx, cmd_rx) = RingBuffer::new(config.command_capacity);
         let (evt_tx, evt_rx) = RingBuffer::new(config.event_capacity);
-        // Each command produces at most one piece of garbage, so a garbage
-        // queue as large as the command queue cannot overflow as long as the
-        // controller collects before sending (which it always does).
+        // Each command produces at most one piece of garbage, and the
+        // controller collects garbage before every send, so a garbage queue
+        // as large as the command queue cannot overflow.
         let (gc_tx, gc_rx) = RingBuffer::new(config.command_capacity);
-        let shared = Arc::new(Shared::default());
+        let shared = Arc::new(Shared {
+            players: (0..config.players)
+                .map(|_| PlayerShared::default())
+                .collect(),
+            dropped_events: AtomicU64::new(0),
+            leaked_garbage: AtomicU64::new(0),
+        });
 
         let controller = Controller {
             config,
@@ -169,6 +216,14 @@ impl Controller {
         self.config
     }
 
+    fn check(&self, player: PlayerId) -> Result<(), EngineError> {
+        if player.0 < self.config.players {
+            Ok(())
+        } else {
+            Err(EngineError::InvalidPlayer(player))
+        }
+    }
+
     fn send(&mut self, command: Command) -> Result<(), EngineError> {
         self.collect_garbage();
         self.commands
@@ -176,9 +231,15 @@ impl Controller {
             .map_err(|_| EngineError::QueueFull)
     }
 
-    /// Replaces the current timeline. Playback pauses and the playhead
-    /// returns to the start.
-    pub fn load_timeline(&mut self, timeline: Timeline) -> Result<(), EngineError> {
+    fn send_to(&mut self, player: PlayerId, command: Command) -> Result<(), EngineError> {
+        self.check(player)?;
+        self.send(command)
+    }
+
+    /// Loads a timeline into a player, replacing what it held. The player
+    /// stops and its playhead returns to the start.
+    pub fn load(&mut self, player: PlayerId, timeline: Timeline) -> Result<(), EngineError> {
+        self.check(player)?;
         if timeline.sample_rate() != self.config.sample_rate {
             return Err(EngineError::SampleRateMismatch {
                 engine: self.config.sample_rate,
@@ -186,37 +247,64 @@ impl Controller {
             });
         }
         let loaded = Box::new(LoadedTimeline::new(timeline));
-        self.send(Command::SetTimeline(loaded))
+        self.send(Command::Load(player, loaded))
     }
 
-    pub fn play(&mut self) -> Result<(), EngineError> {
-        self.send(Command::Play)
+    /// Empties a player.
+    pub fn unload(&mut self, player: PlayerId) -> Result<(), EngineError> {
+        self.send_to(player, Command::Unload(player))
     }
 
-    /// Halts playback, keeping the playhead where it is.
-    pub fn pause(&mut self) -> Result<(), EngineError> {
-        self.send(Command::Pause)
+    /// Starts or resumes a player.
+    pub fn play(&mut self, player: PlayerId) -> Result<(), EngineError> {
+        self.send_to(player, Command::Play(player))
     }
 
-    /// Halts playback and returns the playhead to the start.
-    pub fn stop(&mut self) -> Result<(), EngineError> {
-        self.send(Command::Stop)
+    /// Halts a player, keeping its playhead where it is.
+    pub fn pause(&mut self, player: PlayerId) -> Result<(), EngineError> {
+        self.send_to(player, Command::Pause(player))
     }
 
-    /// Moves the playhead. Markers exactly at the new position do not fire.
-    pub fn seek(&mut self, position: Samples) -> Result<(), EngineError> {
-        self.send(Command::Seek(position))
+    /// Halts a player and returns its playhead to the start.
+    pub fn stop(&mut self, player: PlayerId) -> Result<(), EngineError> {
+        self.send_to(player, Command::Stop(player))
+    }
+
+    /// Moves a player's playhead. Markers exactly at the new position do
+    /// not fire.
+    pub fn seek(&mut self, player: PlayerId, position: Samples) -> Result<(), EngineError> {
+        self.send_to(player, Command::Seek(player, position))
+    }
+
+    /// Plays from the start, whether or not the player is already playing.
+    /// This is what firing a sound-board cue does.
+    pub fn restart(&mut self, player: PlayerId) -> Result<(), EngineError> {
+        self.send_to(player, Command::Restart(player))
+    }
+
+    /// Sets a player's gain (linear), smoothed to avoid clicks.
+    pub fn set_player_gain(&mut self, player: PlayerId, gain: f32) -> Result<(), EngineError> {
+        self.send_to(player, Command::SetPlayerGain(player, sanitize_gain(gain)))
+    }
+
+    /// Fades a player to silence over `length` frames, then stops it.
+    pub fn fade_out_and_stop(
+        &mut self,
+        player: PlayerId,
+        length: Samples,
+    ) -> Result<(), EngineError> {
+        self.send_to(player, Command::FadeOutAndStop(player, length))
+    }
+
+    /// Fades every playing player out over `fade` frames (0 = immediately)
+    /// and stops them. The "panic" control.
+    pub fn stop_all(&mut self, fade: Samples) -> Result<(), EngineError> {
+        self.send(Command::StopAll { fade })
     }
 
     /// Sets the master output gain (linear), smoothed to avoid clicks.
     pub fn set_master_gain(&mut self, gain: f32) -> Result<(), EngineError> {
-        let gain = if gain.is_finite() { gain.max(0.0) } else { 0.0 };
-        self.send(Command::SetMasterGain(gain))
-    }
-
-    /// Fades the output to silence over `length` frames, then stops.
-    pub fn fade_out_and_stop(&mut self, length: Samples) -> Result<(), EngineError> {
-        self.send(Command::FadeOutAndStop(length))
+        self.send(Command::SetMasterGain(sanitize_gain(gain)))
     }
 
     /// Next event from the audio thread, if any.
@@ -235,13 +323,20 @@ impl Controller {
         n
     }
 
-    /// Playhead position as of the end of the last processed audio block.
-    pub fn position(&self) -> Samples {
-        self.shared.position.load(Ordering::Relaxed)
+    /// A player's playhead as of the end of the last processed audio block.
+    /// Returns 0 for an invalid player.
+    pub fn position(&self, player: PlayerId) -> Samples {
+        self.shared
+            .players
+            .get(player.0 as usize)
+            .map_or(0, |p| p.position.load(Ordering::Relaxed))
     }
 
-    pub fn is_playing(&self) -> bool {
-        self.shared.playing.load(Ordering::Relaxed)
+    pub fn is_playing(&self, player: PlayerId) -> bool {
+        self.shared
+            .players
+            .get(player.0 as usize)
+            .is_some_and(|p| p.playing.load(Ordering::Relaxed))
     }
 
     /// Events dropped because the event queue was full. Should stay zero;
@@ -254,5 +349,13 @@ impl Controller {
     /// garbage queue was full. Should always be zero.
     pub fn leaked_garbage(&self) -> u64 {
         self.shared.leaked_garbage.load(Ordering::Relaxed)
+    }
+}
+
+fn sanitize_gain(gain: f32) -> f32 {
+    if gain.is_finite() {
+        gain.clamp(0.0, 16.0)
+    } else {
+        0.0
     }
 }

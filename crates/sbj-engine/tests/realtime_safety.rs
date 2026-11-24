@@ -12,7 +12,9 @@ use std::cell::Cell;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use common::*;
-use sbj_engine::{Clip, LoopCount, Marker, MarkerAction, Renderer, Timeline};
+use sbj_engine::{Clip, LoopCount, Marker, MarkerAction, PlayerId, Renderer, Timeline};
+
+const P: PlayerId = PlayerId(0);
 
 struct GuardedAlloc;
 
@@ -80,27 +82,39 @@ fn process_never_allocates_or_frees() {
         .unwrap();
 
     let (mut c, mut r) = engine(2);
-    let mut buf = vec![0.0f32; 256 * 2];
+    // Mix of device block sizes, including one larger than the engine's
+    // internal mix block so the splitting path is covered.
+    let mut buf = vec![0.0f32; 2048 * 2];
 
     // Exercise every command path, including swapping timelines while
     // playing (the old timeline must be freed on this thread, not in
     // `process`).
-    c.load_timeline(busy.clone()).unwrap();
+    c.load(P, busy.clone()).unwrap();
     c.set_master_gain(0.8).unwrap();
-    c.play().unwrap();
+    c.play(P).unwrap();
     for i in 0..200 {
         match i {
-            20 => c.seek(500).unwrap(),
-            40 => c.pause().unwrap(),
-            45 => c.play().unwrap(),
-            60 => c.load_timeline(busy.clone()).unwrap(),
-            61 => c.play().unwrap(),
-            100 => c.fade_out_and_stop(1_000).unwrap(),
-            120 => c.play().unwrap(),
-            150 => c.stop().unwrap(),
+            20 => c.seek(P, 500).unwrap(),
+            40 => c.pause(P).unwrap(),
+            45 => c.play(P).unwrap(),
+            60 => c.load(P, busy.clone()).unwrap(),
+            61 => c.play(P).unwrap(),
+            100 => c.fade_out_and_stop(P, 1_000).unwrap(),
+            120 => c.play(P).unwrap(),
+            130 => {
+                c.load(PlayerId(3), busy.clone()).unwrap();
+                c.set_player_gain(PlayerId(3), 0.5).unwrap();
+                c.restart(PlayerId(3)).unwrap();
+                c.restart(P).unwrap();
+            }
+            140 => c.stop_all(2_000).unwrap(),
+            145 => c.restart(PlayerId(3)).unwrap(),
+            150 => c.stop(P).unwrap(),
+            160 => c.unload(PlayerId(3)).unwrap(),
             _ => {}
         }
-        guarded_process(&mut r, &mut buf);
+        let frames = [256, 2048, 1, 333][i % 4];
+        guarded_process(&mut r, &mut buf[..frames * 2]);
         while c.poll_event().is_some() {}
     }
 
