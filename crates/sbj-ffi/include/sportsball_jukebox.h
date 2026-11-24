@@ -55,6 +55,7 @@ typedef struct SbjCueState {
     bool playing;
     bool looping;
     bool ready;     /* loaded on an open output: can fire */
+    bool holding;   /* vamping: firing again lets it continue */
     double position_seconds;
     double duration_seconds;
 } SbjCueState;
@@ -155,7 +156,9 @@ SbjStatus sbj_session_waveform(const SbjSession *session, const char *file,
 
 /* ---- Playback --------------------------------------------------------- */
 
-/* Plays from the start (restarts if playing). Empty pad: no-op. */
+/* Fires a pad as pressing it does: starts it; if playing, releases a vamp
+ * or applies its retrigger setting. Handles exclusive groups and ducking.
+ * Empty pad: no-op. */
 SbjStatus sbj_session_fire_cue(const SbjSession *session, uint32_t slot);
 SbjStatus sbj_session_play_cue_from(const SbjSession *session, uint32_t slot, double seconds);
 SbjStatus sbj_session_stop_cue(const SbjSession *session, uint32_t slot, double fade_seconds);

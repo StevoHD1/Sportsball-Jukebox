@@ -65,6 +65,7 @@ fn timeline_cue_with_marker_loop_by_marker_reference() {
                 }),
                 count: None,
                 seconds: None,
+                hold: false,
             },
         },
         MarkerDoc {
@@ -79,6 +80,7 @@ fn timeline_cue_with_marker_loop_by_marker_reference() {
                 }),
                 count: Some(2),
                 seconds: None,
+                hold: false,
             },
         },
     ];
@@ -402,6 +404,7 @@ fn show_json_compatibility() {
             to: None,
             count: None,
             seconds: Some(2.0),
+            hold: false,
         },
     });
     show.cues.push(cue);

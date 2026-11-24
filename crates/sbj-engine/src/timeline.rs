@@ -140,6 +140,10 @@ pub enum LoopCount {
     /// Jump back this many times, so the looped section plays `n + 1` times
     /// in total, then continue past the marker.
     Times(u32),
+    /// Keep looping until the operator releases the player (a "vamp"):
+    /// after a release, the playhead continues past this marker the next
+    /// time it reaches it, so the music exits at the loop point.
+    UntilReleased,
 }
 
 /// What happens when the playhead reaches a marker.

@@ -35,7 +35,10 @@ struct CueEditorView: View {
     var body: some View {
         VStack(spacing: 0) {
             EditorHeader(draft: $draft, outputs: model.show.outputs, conflict: hotkeyConflict)
-                .padding(16)
+                .padding([.horizontal, .top], 16)
+            PlaybackRow(draft: $draft, channels: outputChannels)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
             Divider()
             EditorToolbar(
                 cursor: cursor,
@@ -95,6 +98,14 @@ struct CueEditorView: View {
             }
             .keyboardShortcut(.defaultAction)
         }
+    }
+
+    /// Channel count of the pad's output device (8 if not known yet).
+    private var outputChannels: Int {
+        let outputs = model.status?.outputs ?? []
+        guard outputs.indices.contains(draft.output) else { return 8 }
+        let channels = outputs[draft.output].channels
+        return channels > 0 ? channels : 8
     }
 
     private var hotkeyConflict: String? {
@@ -819,9 +830,14 @@ private struct MarkerInspector: View {
                     SecondsField(label: "Time", value: targetTime)
                 }
                 if kind.wrappedValue == .loop {
-                    Toggle("Forever", isOn: forever)
-                    if !forever.wrappedValue {
-                        Stepper("Repeat \(count.wrappedValue)×", value: count, in: 1...999)
+                    Picker("Repeat", selection: loopMode) {
+                        Text("A number of times").tag(LoopMode.times)
+                        Text("Until the pad is pressed (vamp)").tag(LoopMode.vamp)
+                        Text("Forever").tag(LoopMode.forever)
+                    }
+                    .frame(width: 300)
+                    if loopMode.wrappedValue == .times {
+                        Stepper("\(count.wrappedValue)×", value: count, in: 1...999)
                     }
                 }
             }
@@ -835,7 +851,12 @@ private struct MarkerInspector: View {
     private var explanation: String {
         switch kind.wrappedValue {
         case .jump: return "When the playhead reaches this marker, it jumps to the target and keeps playing."
-        case .loop: return "Jumps back to the target, then continues past this marker once the repeats are used up. \"Forever\" loops until you stop or fire the pad."
+        case .loop:
+            switch loopMode.wrappedValue {
+            case .times: return "Jumps back to the target, then continues past this marker once the repeats are used up."
+            case .vamp: return "Vamp: loops until the pad is pressed again (or its key, MIDI or OSC), then plays on past this marker. Put the marker at the end of a bar for a musical exit."
+            case .forever: return "Loops until you stop the pad."
+            }
         case .pause: return "Playback pauses here. Play from the editor or fire the pad to restart."
         case .stop: return "Playback stops here and returns to the start."
         case .fadeOut: return "Everything on this pad fades to silence, then stops."
@@ -893,10 +914,31 @@ private struct MarkerInspector: View {
         )
     }
 
-    private var forever: Binding<Bool> {
+    private enum LoopMode: Hashable {
+        case times, vamp, forever
+    }
+
+    private var loopMode: Binding<LoopMode> {
         Binding(
-            get: { actionField(\.count, nil).wrappedValue == nil },
-            set: { actionField(\.count, nil).wrappedValue = $0 ? nil : 1 }
+            get: {
+                if actionField(\.hold, nil).wrappedValue == true { return .vamp }
+                return actionField(\.count, nil).wrappedValue == nil ? .forever : .times
+            },
+            set: { mode in
+                switch mode {
+                case .times:
+                    actionField(\.hold, nil).wrappedValue = nil
+                    if actionField(\.count, nil).wrappedValue == nil {
+                        actionField(\.count, nil).wrappedValue = 1
+                    }
+                case .vamp:
+                    actionField(\.hold, nil).wrappedValue = true
+                    actionField(\.count, nil).wrappedValue = nil
+                case .forever:
+                    actionField(\.hold, nil).wrappedValue = nil
+                    actionField(\.count, nil).wrappedValue = nil
+                }
+            }
         )
     }
 
@@ -942,5 +984,94 @@ private struct MidiField: View {
         .onChange(of: model.show.cue(at: slot)?.midi) { _, learned in
             if let learned { trigger = learned }
         }
+    }
+}
+
+/// How the pad behaves when fired: exclusive group, ducking, what a second
+/// press does, and which output channels it uses.
+private struct PlaybackRow: View {
+    @Binding var draft: CueDoc
+    let channels: Int
+
+    var body: some View {
+        HStack(spacing: 20) {
+            HStack(spacing: 6) {
+                Text("Group")
+                TextField("none", text: group)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 110)
+            }
+            .help("Pads in the same group (e.g. \"Music\") fade each other out")
+
+            HStack(spacing: 6) {
+                Toggle("Duck others", isOn: ducking)
+                if ducking.wrappedValue {
+                    Slider(value: duckDB, in: -40 ... -3)
+                        .frame(width: 100)
+                    Text(String(format: "%.0f dB", duckDB.wrappedValue))
+                        .font(.caption.monospacedDigit())
+                        .frame(width: 44, alignment: .leading)
+                }
+            }
+            .help("Lower everything else on this output while this pad plays")
+
+            Picker("Pressed again", selection: $draft.retrigger) {
+                ForEach(Retrigger.allCases, id: \.self) { mode in
+                    Text(mode.label).tag(mode)
+                }
+            }
+            .frame(width: 210)
+            .help("What pressing the pad does while it plays (a vamp always continues)")
+
+            Picker("Channels", selection: route) {
+                Text("All").tag("")
+                ForEach(routeOptions, id: \.self) { option in
+                    Text(option.label).tag("\(option.first):\(option.count)")
+                }
+                if let current = draft.route, !routeOptions.contains(current) {
+                    Text("\(current.label) (not on device)").tag("\(current.first):\(current.count)")
+                }
+            }
+            .frame(width: 200)
+            Spacer()
+        }
+    }
+
+    /// Stereo pairs, then single channels.
+    private var routeOptions: [RouteDoc] {
+        let pairs = stride(from: 1, to: channels, by: 2).map { RouteDoc(first: $0, count: 2) }
+        let singles = (1...max(channels, 1)).map { RouteDoc(first: $0, count: 1) }
+        return pairs + singles
+    }
+
+    private var group: Binding<String> {
+        Binding(
+            get: { draft.group ?? "" },
+            set: { draft.group = $0.trimmingCharacters(in: .whitespaces).isEmpty ? nil : $0 }
+        )
+    }
+
+    private var ducking: Binding<Bool> {
+        Binding(
+            get: { draft.duck != nil },
+            set: { draft.duck = $0 ? -12 : nil }
+        )
+    }
+
+    private var duckDB: Binding<Double> {
+        Binding(
+            get: { Double(draft.duck ?? -12) },
+            set: { draft.duck = Float($0.rounded()) }
+        )
+    }
+
+    private var route: Binding<String> {
+        Binding(
+            get: { draft.route.map { "\($0.first):\($0.count)" } ?? "" },
+            set: { tag in
+                let parts = tag.split(separator: ":").compactMap { Int($0) }
+                draft.route = parts.count == 2 ? RouteDoc(first: parts[0], count: parts[1]) : nil
+            }
+        )
     }
 }

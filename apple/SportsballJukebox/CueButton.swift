@@ -85,7 +85,9 @@ struct CueButton: View {
     private var accessibilityValue: String {
         guard cue != nil else { return "" }
         var parts: [String] = []
-        if state.playing {
+        if state.holding {
+            parts.append("Vamping, press to continue")
+        } else if state.playing {
             parts.append("Playing, \(formatTime(max(state.duration - state.position, 0))) remaining")
         } else if !state.ready {
             parts.append("Not ready")
@@ -160,6 +162,11 @@ private struct PadFace: View {
                     .font(.headline)
                     .lineLimit(2)
                     .opacity(cue == nil ? 0.5 : 1)
+                if let group = cue?.group, !group.isEmpty {
+                    Text(group.uppercased())
+                        .font(.caption2.weight(.semibold))
+                        .opacity(0.75)
+                }
                 if cue != nil {
                     Text(timeText)
                         .font(.caption.monospacedDigit())
@@ -183,9 +190,21 @@ private struct PadFace: View {
                     .background(Color.black.opacity(0.25), in: RoundedRectangle(cornerRadius: 4))
             }
             Spacer(minLength: 0)
+            if state.holding {
+                Text("VAMP · press to go")
+                    .font(.caption2.weight(.bold))
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 1)
+                    .background(Color.orange, in: Capsule())
+                    .foregroundStyle(.black)
+            }
             if hasProblems {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .foregroundStyle(.yellow)
+            }
+            if cue?.duck != nil {
+                Image(systemName: "speaker.wave.1")
+                    .help("Ducks other pads while playing")
             }
             if let cue, !cue.markers.isEmpty {
                 Image(systemName: "flag.fill")

@@ -91,6 +91,19 @@ pub struct Show {
     /// MIDI triggers for show-wide actions.
     #[serde(default, skip_serializing_if = "is_default_controls")]
     pub controls: ControlsDoc,
+    /// Fade used when an exclusive group hands over to a new cue, seconds.
+    #[serde(
+        default = "default_group_fade",
+        skip_serializing_if = "is_default_group_fade"
+    )]
+    pub group_fade: f64,
+}
+
+fn default_group_fade() -> f64 {
+    1.0
+}
+fn is_default_group_fade(x: &f64) -> bool {
+    *x == 1.0
 }
 
 /// MIDI message kinds that can trigger things.
@@ -155,6 +168,7 @@ impl Default for Show {
             outputs: default_outputs(),
             cues: Vec::new(),
             controls: ControlsDoc::default(),
+            group_fade: default_group_fade(),
         }
     }
 }
@@ -218,6 +232,19 @@ pub struct CueDoc {
     /// MIDI message that fires the cue.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub midi: Option<MidiTrigger>,
+    /// Exclusive group: firing this cue fades out other playing cues with
+    /// the same group name (e.g. "Music").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<String>,
+    /// While playing, lower every other cue on the same output by this
+    /// many dB (negative, e.g. -12).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duck: Option<f32>,
+    #[serde(default, skip_serializing_if = "is_default_retrigger")]
+    pub retrigger: Retrigger,
+    /// Output channels; `None` = all channels of the output.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route: Option<RouteDoc>,
 }
 
 impl CueDoc {
@@ -234,6 +261,10 @@ impl CueDoc {
             clips: vec![ClipDoc::file(file)],
             markers: Vec::new(),
             midi: None,
+            group: None,
+            duck: None,
+            retrigger: Retrigger::Restart,
+            route: None,
         }
     }
 }
@@ -318,6 +349,47 @@ pub struct ActionDoc {
     /// FadeOut: duration.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub seconds: Option<f64>,
+    /// Loop: repeat until the operator presses the pad again (a vamp),
+    /// then continue past this marker. Overrides `count`.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub hold: bool,
+}
+
+impl ActionDoc {
+    pub fn new(kind: ActionKind) -> Self {
+        Self {
+            kind,
+            to: None,
+            count: None,
+            seconds: None,
+            hold: false,
+        }
+    }
+}
+
+/// What pressing a pad does while it is already playing.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Retrigger {
+    /// Play again from the start.
+    #[default]
+    Restart,
+    /// Stop (with a click-free micro-fade).
+    Stop,
+    /// Fade out.
+    Fade,
+}
+
+fn is_default_retrigger(r: &Retrigger) -> bool {
+    *r == Retrigger::Restart
+}
+
+/// Output channels a cue plays through, 1-based (e.g. 3 and 4 of an
+/// 8-channel interface: `first` 3, `count` 2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RouteDoc {
+    pub first: u16,
+    pub count: u16,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -566,10 +638,14 @@ pub fn cue_timeline(
                 } else {
                     MarkerAction::Loop {
                         to,
-                        count: marker
-                            .action
-                            .count
-                            .map_or(LoopCount::Infinite, LoopCount::Times),
+                        count: if marker.action.hold {
+                            LoopCount::UntilReleased
+                        } else {
+                            marker
+                                .action
+                                .count
+                                .map_or(LoopCount::Infinite, LoopCount::Times)
+                        },
                     }
                 }
             }

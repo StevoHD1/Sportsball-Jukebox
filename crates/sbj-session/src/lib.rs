@@ -30,14 +30,15 @@ use sbj_engine::{
 use sbj_media::MediaError;
 
 pub mod control;
+mod playback;
 mod preflight;
 
 pub use control::{ControlMessage, LearnTarget, MidiMessage};
 pub use preflight::{Check, CheckLevel, Preflight};
 pub use show::{
     ActionDoc, ActionKind, ClipDoc, ControlsDoc, CueDoc, CueProblem, CurveDoc, DeviceRef,
-    MAX_PADS_PER_BANK, MAX_SLOTS, MarkerDoc, MidiKind, MidiTrigger, OutputDoc, Show, ShowError,
-    TargetDoc,
+    MAX_PADS_PER_BANK, MAX_SLOTS, MarkerDoc, MidiKind, MidiTrigger, OutputDoc, Retrigger, RouteDoc,
+    Show, ShowError, TargetDoc,
 };
 
 /// How often to retry an output whose devices are all unavailable.
@@ -234,6 +235,8 @@ pub struct CueState {
     pub looping: bool,
     /// The cue's output is open and the cue is loaded on it.
     pub ready: bool,
+    /// Playing a vamp: pressing the pad will let it continue.
+    pub holding: bool,
     pub position_seconds: f64,
     pub duration_seconds: f64,
 }
@@ -315,6 +318,11 @@ pub struct Session<B: AudioBackend> {
     current_bank: u32,
     learning: Option<LearnTarget>,
     last_control: Option<String>,
+    /// Duck factor (linear) currently applied to each slot.
+    duck_applied: HashMap<u32, f32>,
+    /// When each slot was last fired, so a cue counts as playing before
+    /// the audio thread has started it.
+    recent_fires: HashMap<u32, Instant>,
 }
 
 impl<B: AudioBackend> Session<B> {
@@ -338,6 +346,8 @@ impl<B: AudioBackend> Session<B> {
             current_bank: 0,
             learning: None,
             last_control: None,
+            duck_applied: HashMap::new(),
+            recent_fires: HashMap::new(),
         }
     }
 
@@ -787,10 +797,30 @@ impl<B: AudioBackend> Session<B> {
         }
         let length_seconds = samples_to_seconds(timeline.length(), rate);
         let player = PlayerId(slot);
+        let channels = live.config.channels;
+        let (first, count) = match cue.route {
+            None => (0, 0),
+            Some(r) if r.first >= 1 && r.count >= 1 && r.first - 1 + r.count <= channels => {
+                (r.first - 1, r.count)
+            }
+            Some(r) => {
+                self.problems.push(CueProblem {
+                    slot,
+                    message: format!(
+                        "channels {}-{} are not available on this device ({channels} channels); playing on all channels",
+                        r.first,
+                        r.first + r.count.saturating_sub(1)
+                    ),
+                });
+                (0, 0)
+            }
+        };
+        let duck = self.duck_applied.get(&slot).copied().unwrap_or(1.0);
         let loaded = live
             .controller
             .load(player, timeline)
-            .and_then(|()| live.controller.set_player_gain(player, cue.gain));
+            .and_then(|()| live.controller.set_route(player, first, count))
+            .and_then(|()| live.controller.set_player_gain(player, cue.gain * duck));
         match loaded {
             Ok(()) => {
                 self.loaded.insert(
@@ -887,13 +917,16 @@ impl<B: AudioBackend> Session<B> {
 
     /// Plays a cue from the start (restarting it if playing). Firing an
     /// empty pad does nothing.
+    /// Fires a pad, as pressing it does: plays it from the start, or if it
+    /// is already playing, releases a vamp or applies its retrigger setting
+    /// (restart, stop or fade). Starting a cue fades out others in its
+    /// exclusive group and applies its ducking. Firing an empty pad does
+    /// nothing.
     pub fn fire_cue(&mut self, slot: u32) -> Result<()> {
-        if slot < self.show.total_slots() && self.show.cue(slot).is_none() {
-            return Ok(());
+        if slot >= self.show.total_slots() {
+            return Err(SessionError::InvalidCue(slot));
         }
-        let (live, _) = self.live_for(slot)?;
-        live.controller.restart(PlayerId(slot))?;
-        Ok(())
+        self.fire(slot)
     }
 
     /// Plays a cue from `seconds` into its timeline.
@@ -909,6 +942,7 @@ impl<B: AudioBackend> Session<B> {
 
     /// Stops a cue, fading out over `fade_seconds` (0 = immediately).
     pub fn stop_cue(&mut self, slot: u32, fade_seconds: f64) -> Result<()> {
+        self.recent_fires.remove(&slot);
         let (live, _) = self.live_for(slot)?;
         let fade = seconds_to_samples(fade_seconds, live.config.sample_rate);
         if fade == 0 {
@@ -921,6 +955,7 @@ impl<B: AudioBackend> Session<B> {
 
     /// Stops everything on every output.
     pub fn stop_all(&mut self, fade_seconds: f64) -> Result<()> {
+        self.recent_fires.clear();
         for live in self.outputs.iter_mut().filter_map(|o| o.live.as_mut()) {
             let fade = seconds_to_samples(fade_seconds, live.config.sample_rate);
             live.controller.stop_all(fade)?;
@@ -956,6 +991,7 @@ impl<B: AudioBackend> Session<B> {
             let player = PlayerId(slot);
             state.ready = true;
             state.playing = live.controller.is_playing(player);
+            state.holding = live.controller.is_holding(player);
             state.position_seconds =
                 samples_to_seconds(live.controller.position(player), live.config.sample_rate);
             state.duration_seconds = loaded.length_seconds;
@@ -982,6 +1018,7 @@ impl<B: AudioBackend> Session<B> {
             while live.controller.poll_event().is_some() {}
             live.controller.collect_garbage();
         }
+        self.update_ducking();
         let now = Instant::now();
         for index in 0..self.outputs.len() {
             let failed = self.outputs[index]

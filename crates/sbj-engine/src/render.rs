@@ -81,6 +81,18 @@ impl GainRamp {
         }
     }
 
+    /// Ramps to `target` over `frames` frames.
+    fn set_over(&mut self, target: f32, frames: u32) {
+        self.target = target;
+        if frames == 0 {
+            self.current = target;
+            self.remaining = 0;
+        } else {
+            self.step = (target - self.current) / frames as f32;
+            self.remaining = frames;
+        }
+    }
+
     /// Jumps straight to `target` with no ramp (for when nothing is
     /// audible, so there is no click to smooth).
     fn jump(&mut self, target: f32) {
@@ -175,6 +187,30 @@ struct Player {
     crossfade: Option<Crossfade>,
     /// Length of declick crossfades and stop fades; 0 disables them.
     declick: Samples,
+    /// Released from the current "until released" loop.
+    released: bool,
+    route: Route,
+}
+
+/// Which output channels a player feeds.
+#[derive(Clone, Copy)]
+struct Route {
+    first: usize,
+    /// 0 = every channel.
+    count: usize,
+}
+
+impl Route {
+    const ALL: Self = Self { first: 0, count: 0 };
+
+    /// The channel range to write, clamped to `ch` output channels.
+    #[inline]
+    fn range(self, ch: usize) -> (usize, usize) {
+        if self.count == 0 || self.first >= ch {
+            return (0, ch);
+        }
+        (self.first, self.count.min(ch - self.first))
+    }
 }
 
 impl Player {
@@ -187,7 +223,31 @@ impl Player {
             fade_out: None,
             crossfade: None,
             declick,
+            released: false,
+            route: Route::ALL,
         }
+    }
+
+    /// Playing, not yet released, with an "until released" loop at or
+    /// after the playhead.
+    fn holding(&self) -> bool {
+        if !self.transport.playing || self.released {
+            return false;
+        }
+        let Some(tl) = self.timeline.as_deref() else {
+            return false;
+        };
+        let markers = tl.timeline.markers();
+        let from = markers.partition_point(|m| m.position < self.transport.position);
+        markers[from..].iter().any(|m| {
+            matches!(
+                m.action,
+                MarkerAction::Loop {
+                    count: LoopCount::UntilReleased,
+                    ..
+                }
+            )
+        })
     }
 
     /// Starts a crossfade from the current position if audio is playing.
@@ -286,6 +346,7 @@ impl Player {
         self.transport = Transport::STOPPED;
         self.fade_out = None;
         self.crossfade = None;
+        self.released = false;
         if let Some(tl) = self.timeline.as_deref_mut() {
             tl.reset_loops();
         }
@@ -337,7 +398,7 @@ impl Player {
 
             if len > 0 {
                 let span = &mut out[frame * ch..(frame + len as usize) * ch];
-                mix_timeline(&tl.timeline, pos, span, ch);
+                mix_timeline(&tl.timeline, pos, span, ch, self.route);
                 self.apply_crossfade(&tl.timeline, span, aux, ch);
                 self.apply_gain(span, ch);
                 self.transport.position = pos + len;
@@ -372,6 +433,15 @@ impl Player {
                 MarkerAction::Loop { to, count } => {
                     let jump = match count {
                         LoopCount::Infinite => true,
+                        LoopCount::UntilReleased => {
+                            if self.released {
+                                // Exit the vamp; the next vamp holds again.
+                                self.released = false;
+                                false
+                            } else {
+                                true
+                            }
+                        }
                         LoopCount::Times(n) => {
                             let remaining = &mut tl.loop_remaining[i];
                             if *remaining > 0 {
@@ -430,7 +500,7 @@ impl Player {
         let k = frames.min(x.remaining);
         let tail = &mut aux[..k as usize * ch];
         tail.fill(0.0);
-        mix_timeline(timeline, x.from, tail, ch);
+        mix_timeline(timeline, x.from, tail, ch, self.route);
         let done = x.total - x.remaining;
         for (f, (new, old)) in span
             .chunks_exact_mut(ch)
@@ -468,7 +538,8 @@ impl Player {
 }
 
 /// Mixes timeline content for `[start, start + frames)` into `out`.
-fn mix_timeline(timeline: &Timeline, start: Samples, out: &mut [f32], ch: usize) {
+fn mix_timeline(timeline: &Timeline, start: Samples, out: &mut [f32], ch: usize, route: Route) {
+    let (first, width) = route.range(ch);
     let frames = (out.len() / ch) as Samples;
     let end = start + frames;
 
@@ -487,14 +558,14 @@ fn mix_timeline(timeline: &Timeline, start: Samples, out: &mut [f32], ch: usize)
             let offset = t - clip.start;
             let gain = clip.gain * clip.envelope(offset);
             let src = (clip.source_offset + offset) as usize * src_ch;
-            let dst = (t - start) as usize * ch;
+            let dst = (t - start) as usize * ch + first;
             if src_ch == 1 {
                 let s = data[src] * gain;
-                for o in &mut out[dst..dst + ch] {
+                for o in &mut out[dst..dst + width] {
                     *o += s;
                 }
             } else {
-                for c in 0..ch.min(src_ch) {
+                for c in 0..width.min(src_ch) {
                     out[dst + c] += data[src + c] * gain;
                 }
             }
@@ -604,6 +675,7 @@ impl Renderer {
             published
                 .playing
                 .store(player.transport.playing, Ordering::Relaxed);
+            published.holding.store(player.holding(), Ordering::Relaxed);
         }
     }
 
@@ -650,6 +722,21 @@ impl Renderer {
                     } else {
                         player.gain.jump(gain);
                     }
+                }
+                Command::SetPlayerGainOver(id, gain, frames) => {
+                    let player = &mut self.players[id.0 as usize];
+                    if player.transport.playing {
+                        player.gain.set_over(gain, frames);
+                    } else {
+                        player.gain.jump(gain);
+                    }
+                }
+                Command::Release(id) => self.players[id.0 as usize].released = true,
+                Command::SetRoute(id, first, count) => {
+                    self.players[id.0 as usize].route = Route {
+                        first: usize::from(first),
+                        count: usize::from(count),
+                    };
                 }
                 Command::FadeOutAndStop(id, length) => {
                     let player = &mut self.players[id.0 as usize];

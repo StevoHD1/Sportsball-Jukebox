@@ -22,9 +22,12 @@ struct ShowDoc: Codable, Equatable {
     var outputs: [OutputDoc] = [OutputDoc(name: "Main")]
     var cues: [CueDoc] = []
     var controls = ControlsDoc()
+    /// Seconds an exclusive group takes to hand over.
+    var groupFade: Double = 1.0
 
     enum CodingKeys: String, CodingKey {
         case format, version, name, slots, columns, banks, outputs, cues, controls
+        case groupFade = "group_fade"
     }
 
     /// Global slot numbers of a bank's pads.
@@ -44,6 +47,7 @@ struct ShowDoc: Codable, Equatable {
         columns = try c.value(.columns, or: columns)
         banks = try c.value(.banks, or: banks)
         controls = try c.value(.controls, or: controls)
+        groupFade = try c.value(.groupFade, or: groupFade)
         outputs = try c.value(.outputs, or: outputs)
         cues = try c.value(.cues, or: cues)
     }
@@ -134,9 +138,16 @@ struct CueDoc: Codable, Equatable {
     var clips: [ClipDoc] = []
     var markers: [MarkerDoc] = []
     var midi: MidiTrigger?
+    /// Exclusive group: firing this fades out others in the same group.
+    var group: String?
+    /// dB (negative) to lower other pads on the same output while playing.
+    var duck: Float?
+    var retrigger: Retrigger = .restart
+    var route: RouteDoc?
 
     enum CodingKeys: String, CodingKey {
         case slot, title, hotkey, output, gain, loop, color, clips, markers, midi
+        case group, duck, retrigger, route
     }
 
     init(slot: Int, title: String, file: String) {
@@ -161,11 +172,37 @@ struct CueDoc: Codable, Equatable {
         clips = try c.value(.clips, or: [])
         markers = try c.value(.markers, or: [])
         midi = try c.decodeIfPresent(MidiTrigger.self, forKey: .midi)
+        group = try c.decodeIfPresent(String.self, forKey: .group)
+        duck = try c.decodeIfPresent(Float.self, forKey: .duck)
+        retrigger = try c.value(.retrigger, or: .restart)
+        route = try c.decodeIfPresent(RouteDoc.self, forKey: .route)
     }
 
     /// Smallest marker id not in use.
     var nextMarkerID: UInt64 {
         (markers.map(\.id).max() ?? 0) + 1
+    }
+}
+
+enum Retrigger: String, Codable, CaseIterable {
+    case restart, stop, fade
+
+    var label: String {
+        switch self {
+        case .restart: return "Restart"
+        case .stop: return "Stop"
+        case .fade: return "Fade out"
+        }
+    }
+}
+
+/// Output channels, 1-based.
+struct RouteDoc: Codable, Equatable, Hashable {
+    var first: Int
+    var count: Int
+
+    var label: String {
+        count == 1 ? "Channel \(first)" : "Channels \(first)–\(first + count - 1)"
     }
 }
 
@@ -241,6 +278,8 @@ struct ActionDoc: Codable, Equatable {
     var to: TargetDoc?
     var count: UInt32?
     var seconds: Double?
+    /// Loop until the pad is pressed again (a vamp).
+    var hold: Bool? = nil
 }
 
 struct MarkerDoc: Codable, Equatable, Identifiable {

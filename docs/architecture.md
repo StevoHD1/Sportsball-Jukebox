@@ -1,6 +1,6 @@
 # Sportsball Jukebox: Architecture
 
-Status: Phase 3 (live operation and polish). Last updated 2026-11-24.
+Status: Phase 4 (game-day workflow). Last updated 2026-11-24.
 
 ## Goals, in priority order
 
@@ -280,6 +280,36 @@ counts, per-pad problems, pads that can't play, duplicate keys (per bank)
 and MIDI triggers, and memory used by decoded audio. Each item is an
 error, warning or info.
 
+## Firing a pad (Phase 4)
+
+`Session::fire_cue` is what pressing a pad does, whether from a click,
+its key, MIDI or OSC:
+
+1. **Vamp release.** If the pad is playing and holding at a vamp (a loop
+   marker with `hold: true`, i.e. `LoopCount::UntilReleased`), it
+   releases the vamp: the current pass finishes and playback continues
+   past the loop marker. Releases are one-shot, so the next vamp holds
+   again, and a restart re-arms everything. The engine publishes a
+   `holding` flag per player (playing, unreleased, and a vamp at or after
+   the playhead), so the UI can show "VAMP · press to go".
+2. **Retrigger.** Otherwise, a playing pad's `retrigger` setting
+   decides: `restart` (default), `stop` or `fade`.
+3. **Exclusive group.** Starting a pad fades out other playing pads with
+   the same `group` (case-insensitive) over the show's `group_fade`
+   (1 s by default).
+4. **Ducking.** While a pad with `duck` (dB, negative) is playing, every
+   other pad on the same output is lowered by the deepest active duck.
+   The dip uses a 150 ms ramp and recovery 800 ms
+   (`SetPlayerGainOver`). A just-fired pad counts as playing until the
+   audio thread reports it (at most 250 ms), so ducking starts at once.
+   Recovery is noticed on the UI's next poll, within about 33 ms.
+
+**Routing.** A cue's `route` (`first`, `count`, 1-based) sends it to
+specific output channels (e.g. 3–4 of an 8-channel interface). Mono
+sources feed every routed channel; multichannel sources map channel by
+channel. A route beyond the device's channels is reported as a problem
+and the cue plays on all channels.
+
 ## Performance
 
 `cargo run --release -p sbj-engine --example bench` renders 30 s in
@@ -369,8 +399,17 @@ CI.
 - Signing and notarization documented (`docs/releasing.md`) for when there
   is an Apple Developer account.
 
+**Phase 4: Game-day workflow (built; awaiting Mac testing)**
+- Vamps: loops that hold until the pad is pressed again, then exit at
+  the loop point.
+- Retrigger behaviour per pad (restart / stop / fade).
+- Exclusive groups with crossfaded hand-over.
+- Ducking other pads on the same output while a pad plays.
+- Per-pad output channel routing.
+
 **Next candidates**
-- Hot cues: firing one pad ducks or stops others (exclusive groups).
-- Per-output channel routing (e.g. pads to outputs 3/4 of an interface).
-- "Armed" loops that exit at the next bar when the operator presses go.
+- Playlists: a pad that steps through a list of songs (e.g. timeout
+  music), with shuffle.
+- Fade-in/out curves per pad on fire and stop, and a "panic" fade time
+  setting.
 - Signed releases once there is a Developer account.

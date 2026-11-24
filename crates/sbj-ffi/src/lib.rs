@@ -70,6 +70,8 @@ pub struct SbjCueState {
     pub looping: bool,
     /// Loaded on an open output, i.e. can fire.
     pub ready: bool,
+    /// Vamping: firing the pad again lets it continue past its vamp.
+    pub holding: bool,
     pub position_seconds: f64,
     pub duration_seconds: f64,
 }
@@ -1105,6 +1107,7 @@ pub unsafe extern "C" fn sbj_session_cue_states(
                     playing: st.playing,
                     looping: st.looping,
                     ready: st.ready,
+                    holding: st.holding,
                     position_seconds: st.position_seconds,
                     duration_seconds: st.duration_seconds,
                 };

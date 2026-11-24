@@ -129,6 +129,18 @@ built-in speakers or headphones)
 - [ ] Turn on VoiceOver (⌘F5) and move over the pads: each reads its
       title, state and key.
 
+**Phase 4: game-day workflow**
+- [ ] In a pad editor, add a Loop marker and set Repeat to "Until the pad
+      is pressed (vamp)". Fire the pad: it loops and shows "VAMP · press
+      to go". Press its key: it finishes the pass and plays on to the end.
+- [ ] Give two pads the group "Music". Fire one, then the other: the
+      first fades out over a second.
+- [ ] Set a pad to "Duck others" at -12 dB and fire it while music plays:
+      the music dips, then comes back when it ends.
+- [ ] Set "Pressed again" to Stop on a pad: a second press stops it.
+- [ ] With a multichannel interface, set a pad's Channels to 3–4: it
+      plays only there.
+
 **Stress**
 - [ ] Leave a looping cue running for 10+ minutes. The status line should
       not start showing "glitches".

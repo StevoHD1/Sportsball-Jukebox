@@ -12,6 +12,7 @@
 //! |---|---|
 //! | `/sbj/fire/<pad>` or `/sbj/fire/<bank>/<pad>` | fire a pad |
 //! | `/sbj/fire` with an int argument | fire that pad in the current bank |
+//! | `/sbj/go/<pad>` | same as fire; on a vamping pad, lets it continue |
 //! | `/sbj/title` with a string argument | fire the pad with that title |
 //! | `/sbj/stop/<pad>` or `/sbj/stop/<bank>/<pad>` | stop a pad |
 //! | `/sbj/fade/<pad>` or `/sbj/fade/<bank>/<pad>` | fade a pad out |
@@ -219,7 +220,7 @@ impl<B: AudioBackend> Session<B> {
                 Some(slot) => self.osc_fire(slot),
                 None => "needs a pad number".into(),
             },
-            ["sbj", verb @ ("fire" | "stop" | "fade"), rest @ ..] => {
+            ["sbj", verb @ ("fire" | "go" | "stop" | "fade"), rest @ ..] => {
                 let numbers: Vec<i64> = rest.iter().filter_map(|p| p.parse().ok()).collect();
                 let slot = match numbers.as_slice() {
                     [pad] => self.osc_slot(None, *pad),
@@ -228,7 +229,9 @@ impl<B: AudioBackend> Session<B> {
                 };
                 match (slot, *verb) {
                     (None, _) => "no such pad".into(),
-                    (Some(slot), "fire") => self.osc_fire(slot),
+                    // "go" is "fire" by another name: on a vamping pad it
+                    // releases the vamp.
+                    (Some(slot), "fire" | "go") => self.osc_fire(slot),
                     (Some(slot), "stop") => {
                         let label = self.describe_target(LearnTarget::Cue(slot));
                         report(self.stop_cue(slot, 0.0), format!("stop {label}"))

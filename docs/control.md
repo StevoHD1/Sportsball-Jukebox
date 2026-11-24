@@ -41,6 +41,7 @@ Turn OSC on in **Show → MIDI & OSC…** and pick a UDP port (default
 | `/sbj/fire/<pad>` | Fire a pad in the bank shown (pads count from 1) |
 | `/sbj/fire/<bank>/<pad>` | Fire a pad in a specific bank |
 | `/sbj/fire` + int argument | Fire that pad in the bank shown |
+| `/sbj/go/<pad>`, `/sbj/go/<bank>/<pad>` | Same as fire. On a vamping pad it lets the music continue, which is clearer on a Stream Deck button |
 | `/sbj/title` + string argument | Fire the pad with that title (any case) |
 | `/sbj/stop/<pad>`, `/sbj/stop/<bank>/<pad>` | Stop a pad |
 | `/sbj/fade/<pad>`, `/sbj/fade/<bank>/<pad>` | Fade a pad out (0.5 s) |

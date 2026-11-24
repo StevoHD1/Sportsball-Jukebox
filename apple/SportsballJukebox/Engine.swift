@@ -66,6 +66,8 @@ struct CueStatus: Equatable, Sendable {
     var playing = false
     var looping = false
     var ready = false
+    /// Vamping: pressing the pad lets it continue.
+    var holding = false
     var position: Double = 0
     var duration: Double = 0
 
@@ -256,6 +258,7 @@ final class EngineSession: @unchecked Sendable {
                 playing: $0.playing,
                 looping: $0.looping,
                 ready: $0.ready,
+                holding: $0.holding,
                 position: $0.position_seconds,
                 duration: $0.duration_seconds
             )

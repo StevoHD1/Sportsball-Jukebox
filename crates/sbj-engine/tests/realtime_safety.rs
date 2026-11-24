@@ -113,6 +113,12 @@ fn process_never_allocates_or_frees() {
             145 => c.restart(PlayerId(3)).unwrap(),
             150 => c.stop(P).unwrap(),
             160 => c.unload(PlayerId(3)).unwrap(),
+            170 => {
+                c.set_route(P, 1, 1).unwrap();
+                c.restart(P).unwrap();
+                c.set_player_gain_over(P, 0.2, 5_000).unwrap();
+                c.release(P).unwrap();
+            }
             _ => {}
         }
         let frames = [256, 2048, 1, 333][i % 4];

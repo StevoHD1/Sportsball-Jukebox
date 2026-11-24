@@ -647,3 +647,138 @@ fn stopping_a_paused_player_is_immediate() {
     render(&mut r, 1, 1);
     assert_eq!(c.position(P), 0);
 }
+
+// ---------------------------------------------------------------------
+// Vamps (until-released loops), routing, ramped gain
+// ---------------------------------------------------------------------
+
+fn vamp_timeline() -> Timeline {
+    // Intro 0..200, vamp 200..400 (loops until released), outro 400..600.
+    Timeline::builder(RATE)
+        .clip(Clip::new(ramp_buffer(600)))
+        .marker(Marker::new(
+            1,
+            400,
+            MarkerAction::Loop {
+                to: 200,
+                count: LoopCount::UntilReleased,
+            },
+        ))
+        .build()
+        .unwrap()
+}
+
+#[test]
+fn vamp_loops_until_released_then_exits_at_the_loop_point() {
+    for &block in BLOCK_SIZES {
+        let (mut c, mut r) = engine(1);
+        c.load(P, vamp_timeline()).unwrap();
+        c.play(P).unwrap();
+        // Intro plus three passes of the vamp.
+        let out = render(&mut r, 200 + 3 * 200 + 50, block);
+        assert_eq!(&out[..200], ramp(0..200).as_slice());
+        for pass in 0..3 {
+            let at = 200 + pass * 200;
+            assert_eq!(
+                &out[at..at + 200],
+                ramp(200..400).as_slice(),
+                "pass {pass} block {block}"
+            );
+        }
+        assert!(c.is_holding(P));
+
+        // Released mid-vamp: finish this pass, then play the outro.
+        c.release(P).unwrap();
+        let rest = render_until_stopped(&c, &mut r, block, 10_000);
+        assert_eq!(
+            rest,
+            concat(&[ramp(250..400), ramp(400..600)]),
+            "block {block}"
+        );
+        assert!(!c.is_holding(P));
+    }
+}
+
+#[test]
+fn release_applies_once_and_restart_rearms() {
+    // Two vamps in a row: one release only gets past the first.
+    let t = Timeline::builder(RATE)
+        .clip(Clip::new(ramp_buffer(600)))
+        .marker(Marker::new(
+            1,
+            200,
+            MarkerAction::Loop {
+                to: 100,
+                count: LoopCount::UntilReleased,
+            },
+        ))
+        .marker(Marker::new(
+            2,
+            400,
+            MarkerAction::Loop {
+                to: 300,
+                count: LoopCount::UntilReleased,
+            },
+        ))
+        .build()
+        .unwrap();
+    let (mut c, mut r) = engine(1);
+    c.load(P, t).unwrap();
+    c.play(P).unwrap();
+    c.release(P).unwrap(); // before even reaching the first vamp
+    let out = render(&mut r, 200 + 200 + 300, 64);
+    assert_eq!(
+        &out[..400],
+        ramp(0..400).as_slice(),
+        "passes the first vamp"
+    );
+    assert_eq!(
+        &out[400..500],
+        ramp(300..400).as_slice(),
+        "holds at the second"
+    );
+    assert!(c.is_holding(P));
+
+    c.restart(P).unwrap();
+    let out = render(&mut r, 300, 64);
+    assert_eq!(
+        &out[200..300],
+        ramp(100..200).as_slice(),
+        "restart re-arms the hold"
+    );
+}
+
+#[test]
+fn routing_sends_to_chosen_channels() {
+    let (mut c, mut r) = engine(4);
+    c.load(P, constant(0.5, 100)).unwrap();
+    c.set_route(P, 2, 2).unwrap(); // channels 3-4
+    c.play(P).unwrap();
+    let out = render(&mut r, 2, 2);
+    assert_eq!(out, vec![0.0, 0.0, 0.5, 0.5, 0.0, 0.0, 0.5, 0.5]);
+
+    // A route past the device's channels is clamped, not a crash.
+    c.set_route(P, 3, 2).unwrap();
+    let out = render(&mut r, 1, 1);
+    assert_eq!(out, vec![0.0, 0.0, 0.0, 0.5]);
+    c.set_route(P, 9, 2).unwrap();
+    assert_eq!(
+        render(&mut r, 1, 1),
+        vec![0.5; 4],
+        "out of range: all channels"
+    );
+    c.set_route(P, 0, 0).unwrap();
+    assert_eq!(render(&mut r, 1, 1), vec![0.5; 4]);
+}
+
+#[test]
+fn ramped_gain_takes_the_requested_time() {
+    let (mut c, mut r) = engine(1);
+    c.load(P, constant(1.0, 10_000)).unwrap();
+    c.play(P).unwrap();
+    render(&mut r, 10, 10);
+    c.set_player_gain_over(P, 0.0, 1000).unwrap();
+    let out = render(&mut r, 1100, 128);
+    assert!((out[499] - 0.5).abs() < 0.01, "{}", out[499]);
+    assert!(out[1000..].iter().all(|&s| s == 0.0));
+}

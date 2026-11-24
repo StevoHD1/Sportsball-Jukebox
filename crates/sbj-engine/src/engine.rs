@@ -132,8 +132,16 @@ pub(crate) enum Command {
     Seek(PlayerId, Samples),
     Restart(PlayerId),
     SetPlayerGain(PlayerId, f32),
+    /// Gain change ramped over a given number of frames (ducking).
+    SetPlayerGainOver(PlayerId, f32, u32),
+    /// Lets the player leave its current "until released" loop.
+    Release(PlayerId),
+    /// Output channels the player feeds: `first`, `count` (0 = all).
+    SetRoute(PlayerId, u16, u16),
     FadeOutAndStop(PlayerId, Samples),
-    StopAll { fade: Samples },
+    StopAll {
+        fade: Samples,
+    },
     SetMasterGain(f32),
 }
 
@@ -147,6 +155,8 @@ pub(crate) enum Garbage {
 
 #[derive(Debug, Default)]
 pub(crate) struct PlayerShared {
+    /// Playing and waiting for a release before it leaves a vamp loop.
+    pub holding: AtomicBool,
     pub position: AtomicU64,
     pub playing: AtomicBool,
 }
@@ -291,6 +301,46 @@ impl Controller {
     /// Sets a player's gain (linear), smoothed to avoid clicks.
     pub fn set_player_gain(&mut self, player: PlayerId, gain: f32) -> Result<(), EngineError> {
         self.send_to(player, Command::SetPlayerGain(player, sanitize_gain(gain)))
+    }
+
+    /// Changes a player's gain over `frames` frames (for ducking, where a
+    /// slower, audible ramp is wanted).
+    pub fn set_player_gain_over(
+        &mut self,
+        player: PlayerId,
+        gain: f32,
+        frames: u32,
+    ) -> Result<(), EngineError> {
+        self.send_to(
+            player,
+            Command::SetPlayerGainOver(player, sanitize_gain(gain), frames),
+        )
+    }
+
+    /// Releases a player from its current "until released" loop: it plays
+    /// on past the loop marker the next time it reaches it.
+    pub fn release(&mut self, player: PlayerId) -> Result<(), EngineError> {
+        self.send_to(player, Command::Release(player))
+    }
+
+    /// Sends a player to output channels `first..first + count` (0-based;
+    /// `count` 0 = every channel). Mono audio feeds all of them; multi-
+    /// channel audio maps channel by channel.
+    pub fn set_route(
+        &mut self,
+        player: PlayerId,
+        first: u16,
+        count: u16,
+    ) -> Result<(), EngineError> {
+        self.send_to(player, Command::SetRoute(player, first, count))
+    }
+
+    /// Whether a player is playing and has an unreleased vamp loop ahead.
+    pub fn is_holding(&self, player: PlayerId) -> bool {
+        self.shared
+            .players
+            .get(player.0 as usize)
+            .is_some_and(|p| p.holding.load(Ordering::Relaxed))
     }
 
     /// Fades a player to silence over `length` frames, then stops it.
