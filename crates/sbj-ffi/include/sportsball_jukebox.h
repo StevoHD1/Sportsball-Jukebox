@@ -106,7 +106,7 @@ char *sbj_session_show_json(const SbjSession *session);
 /* {"game", "preview_output": number|null, "preview": {"slot","playing","position"}|null,
  *  "bank", "learning": "cue:N|stop_all|next_bank|prev_bank"|null,
  *  "last_control": string|null, "midi_inputs": [string]|null (null = MIDI off),
- *  "osc_port": number|null, "dirty", "path",
+ *  "osc_port": number|null, "remote_port": number|null, "dirty", "path",
  *  "outputs": [{"name","status":"running|on_backup|offline",
  *  "device_id","device_name","sample_rate","channels","xruns","error"}],
  *  "problems": [{"slot","message"}], "notices": [string]}.
@@ -134,6 +134,10 @@ SbjStatus sbj_session_enable_midi(const SbjSession *session, bool enabled);
 /* Listen for OSC on a UDP port; 0 stops. See sbj-session/src/control.rs
  * for the address space (/sbj/fire/<pad>, /sbj/stopall, ...). */
 SbjStatus sbj_session_set_osc_port(const SbjSession *session, uint16_t port);
+/* Serve the phone/tablet remote page on a TCP port (all interfaces);
+ * 0 stops it. pin: 4-12 digits, required by every /api/ request
+ * (X-SBJ-PIN header); may be NULL when port is 0. */
+SbjStatus sbj_session_set_remote(const SbjSession *session, uint16_t port, const char *pin);
 /* Assign the next MIDI message to target: "cue:<slot>", "stop_all",
  * "next_bank", "prev_bank". NULL cancels. */
 SbjStatus sbj_session_learn_midi(const SbjSession *session, const char *target);

@@ -208,3 +208,65 @@ fn preflight_reports_problems() {
             .any(|c| c.message.contains("cannot play"))
     );
 }
+
+#[test]
+fn remote_state_and_requests() {
+    let (_b, mut s) = banked();
+    let state = s.handle_remote("GET", "/api/state").unwrap();
+    assert_eq!(state["banks"].as_array().unwrap().len(), 2);
+    assert_eq!(state["bank"], 0);
+    let pads = state["pads"].as_array().unwrap();
+    assert_eq!(pads.len(), 4, "only the current bank");
+    assert_eq!(pads[0]["title"], "Alpha");
+    assert_eq!(pads[1]["assigned"], false);
+
+    // Fire bank 2 pad 3 by absolute slot, from any bank.
+    s.handle_remote("POST", "/api/fire/6").unwrap();
+    assert!(pull(&mut s, 0, 10).iter().all(|&x| x == 0.5));
+    let state = s.remote_state();
+    assert_eq!(state["playing"][0]["title"], "Beta");
+    assert!(state["playing"][0]["remaining"].as_f64().unwrap() > 0.0);
+    assert!(s.last_control().unwrap().starts_with("Remote "));
+
+    s.handle_remote("POST", "/api/bank/2").unwrap();
+    assert_eq!(s.current_bank(), 1);
+    let state = s.handle_remote("GET", "/api/state").unwrap();
+    assert_eq!(state["pads"][2]["title"], "Beta");
+    assert_eq!(state["pads"][2]["playing"], true);
+
+    s.handle_remote("POST", "/api/stop/6").unwrap();
+    pull(&mut s, 0, 10);
+    assert!(!s.cue_state(6).unwrap().playing);
+    s.handle_remote("POST", "/api/fire/0").unwrap();
+    s.handle_remote("POST", "/api/stopall/now").unwrap();
+    pull(&mut s, 0, 10);
+    assert!(!s.cue_state(0).unwrap().playing);
+
+    assert_eq!(
+        s.handle_remote("POST", "/api/fire/8").unwrap_err().status,
+        404
+    );
+    assert_eq!(
+        s.handle_remote("POST", "/api/fire/x").unwrap_err().status,
+        400
+    );
+    assert_eq!(
+        s.handle_remote("GET", "/api/fire/1").unwrap_err().status,
+        404
+    );
+    assert_eq!(
+        s.handle_remote("POST", "/api/reboot").unwrap_err().status,
+        404
+    );
+}
+
+#[test]
+fn remote_presses_are_logged_as_remote() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_b, mut s) = banked();
+    s.set_log_dir(Some(dir.path().to_path_buf()));
+    s.handle_remote("POST", "/api/fire/0").unwrap();
+    pull(&mut s, 0, 10);
+    s.poll();
+    assert_eq!(s.log_entries()[0].source, "remote");
+}

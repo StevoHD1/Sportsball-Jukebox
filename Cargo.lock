@@ -965,6 +965,8 @@ version = "0.1.0"
 dependencies = [
  "midir",
  "rosc",
+ "sbj-backend",
+ "sbj-engine",
  "sbj-session",
 ]
 

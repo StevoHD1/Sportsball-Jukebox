@@ -34,6 +34,8 @@ pub mod log;
 mod playback;
 mod playlist;
 mod preview;
+mod remote;
+pub use remote::RemoteError;
 
 pub use log::{LogEntry, LogTotal};
 

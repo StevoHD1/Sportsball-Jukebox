@@ -117,6 +117,7 @@ private struct HeaderBar: View {
             } label: {
                 Label("Pre-game Check", systemImage: "checklist")
             }
+            .help("Check devices, files, keys and MIDI before the game")
 
             Button {
                 model.showingLog = true
@@ -125,15 +126,14 @@ private struct HeaderBar: View {
             }
             .labelStyle(.iconOnly)
             .help("What played, for licensing and sponsor reports")
-            .help("Check devices, files, keys and MIDI before the game")
 
             Button {
                 model.showingControls = true
             } label: {
-                Label("MIDI & OSC", systemImage: "pianokeys")
+                Label("Control", systemImage: "pianokeys")
             }
             .labelStyle(.iconOnly)
-            .help("External control: MIDI controllers, OSC, Stream Deck")
+            .help("External control: MIDI, OSC, Stream Deck, phone/tablet remote")
 
             Image(systemName: "speaker.wave.2.fill")
                 .foregroundStyle(.secondary)
@@ -265,7 +265,7 @@ private struct BankBar: View {
     }
 }
 
-/// Bottom line: MIDI / OSC state and the last control message received.
+/// Bottom line: MIDI / OSC / remote state and the last control message received.
 private struct ControlFooter: View {
     @EnvironmentObject private var model: AppModel
 
@@ -283,6 +283,9 @@ private struct ControlFooter: View {
             Spacer()
             Text(midiText)
             Text(oscText)
+            if let port = model.status?.remotePort {
+                Text("Remote: port \(String(port))")
+            }
         }
         .font(.caption)
         .foregroundStyle(.secondary)

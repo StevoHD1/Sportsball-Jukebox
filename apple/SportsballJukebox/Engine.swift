@@ -187,6 +187,12 @@ final class EngineSession: @unchecked Sendable {
         try Engine.check(sbj_session_set_osc_port(handle, UInt16(clamping: port)))
     }
 
+    /// Serves the phone/tablet remote page on a TCP port; 0 stops it.
+    /// `pin` must be 4–12 digits.
+    func setRemote(port: Int, pin: String) throws {
+        try Engine.check(sbj_session_set_remote(handle, UInt16(clamping: port), pin))
+    }
+
     /// Learns the next MIDI message for a target ("cue:<slot>",
     /// "stop_all", "next_bank", "prev_bank"); nil cancels.
     func learnMIDI(target: String?) throws {

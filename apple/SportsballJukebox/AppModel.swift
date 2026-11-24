@@ -64,6 +64,23 @@ final class AppModel: ObservableObject {
             applyOSC()
         }
     }
+    /// The phone/tablet remote page (off by default: it opens a port).
+    @Published var remoteEnabled: Bool = UserDefaults.standard.bool(forKey: "remoteEnabled") {
+        didSet {
+            UserDefaults.standard.set(remoteEnabled, forKey: "remoteEnabled")
+            applyRemote()
+        }
+    }
+    @Published var remotePort: Int = {
+        let saved = UserDefaults.standard.integer(forKey: "remotePort")
+        return saved == 0 ? 8765 : saved
+    }() {
+        didSet {
+            UserDefaults.standard.set(remotePort, forKey: "remotePort")
+            applyRemote()
+        }
+    }
+    @Published private(set) var remotePin: String = AppModel.savedOrNewPin()
     @Published var masterVolume: Double = 1.0 {
         didSet { report { try session.setMasterGain(Self.gain(forSlider: masterVolume)) } }
     }
@@ -102,6 +119,7 @@ final class AppModel: ObservableObject {
         refreshShow()
         applyMIDI()
         applyOSC()
+        applyRemote()
 
         if let screenshots = ScreenshotDirector.fromArguments() {
             // Demo / documentation mode: open the given show, capture the
@@ -334,6 +352,36 @@ final class AppModel: ObservableObject {
             alert = AlertMessage(title: "OSC", message: error.localizedDescription)
         }
         refreshStatus()
+    }
+
+    private func applyRemote() {
+        do {
+            try session.setRemote(port: remoteEnabled ? remotePort : 0, pin: remotePin)
+        } catch {
+            alert = AlertMessage(title: "Remote", message: error.localizedDescription)
+        }
+        refreshStatus()
+    }
+
+    /// A new PIN; phones using the old one are asked for it again.
+    func regenerateRemotePin() {
+        remotePin = Self.newPin()
+        UserDefaults.standard.set(remotePin, forKey: "remotePin")
+        applyRemote()
+    }
+
+    private static func newPin() -> String {
+        // Six digits, leading zeros kept.
+        String(String(Int.random(in: 1_000_000...1_999_999)).dropFirst())
+    }
+
+    private static func savedOrNewPin() -> String {
+        if let pin = UserDefaults.standard.string(forKey: "remotePin"), pin.count == 6 {
+            return pin
+        }
+        let pin = newPin()
+        UserDefaults.standard.set(pin, forKey: "remotePin")
+        return pin
     }
 
     func rescanMIDI() {

@@ -110,6 +110,8 @@ int main(void) {
     CHECK(sbj_session_clear_midi(s, "stop_all") == SBJ_STATUS_OK);
     CHECK(sbj_session_enable_midi(s, true) == SBJ_STATUS_OK);
     CHECK(sbj_session_set_osc_port(s, 0) == SBJ_STATUS_OK);
+    CHECK(sbj_session_set_remote(s, 0, NULL) == SBJ_STATUS_OK);
+    CHECK(sbj_session_set_remote(s, 1, "12") == SBJ_STATUS_INVALID_ARGUMENT);
     char *preflight = sbj_session_preflight_json(s);
     CHECK(preflight != NULL && strstr(preflight, "\"checks\"") != NULL);
     printf("preflight: %s\n", preflight);

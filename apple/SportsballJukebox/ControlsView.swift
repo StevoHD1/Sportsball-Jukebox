@@ -1,6 +1,7 @@
 import SwiftUI
 
-/// MIDI and OSC settings, show-wide MIDI controls, and the OSC cheat sheet.
+/// External control: MIDI, OSC (with its cheat sheet) and the phone/tablet
+/// remote.
 struct ControlsView: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.dismiss) private var dismiss
@@ -9,7 +10,7 @@ struct ControlsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("MIDI & OSC").font(.title2.bold())
+            Text("Control").font(.title2.bold())
 
             GroupBox("MIDI") {
                 VStack(alignment: .leading, spacing: 10) {
@@ -61,6 +62,8 @@ struct ControlsView: View {
                 }
                 .padding(6)
             }
+
+            RemoteSection()
 
             HStack {
                 Spacer()

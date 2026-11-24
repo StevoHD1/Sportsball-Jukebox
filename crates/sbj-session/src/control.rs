@@ -83,7 +83,14 @@ pub enum OscArg {
 #[derive(Debug, Clone, PartialEq)]
 pub enum ControlMessage {
     Midi(MidiMessage),
-    Osc { address: String, args: Vec<OscArg> },
+    Osc {
+        address: String,
+        args: Vec<OscArg>,
+    },
+    /// From the phone/tablet remote page; uses the OSC address space.
+    Remote {
+        address: String,
+    },
 }
 
 /// What MIDI learn will assign the next MIDI message to.
@@ -142,15 +149,18 @@ impl<B: AudioBackend> Session<B> {
         self.log.source = match &message {
             ControlMessage::Midi(_) => "midi",
             ControlMessage::Osc { .. } => "osc",
+            ControlMessage::Remote { .. } => "remote",
         };
         let outcome = match &message {
             ControlMessage::Midi(midi) => self.handle_midi(*midi),
             ControlMessage::Osc { address, args } => self.handle_osc(address, args),
+            ControlMessage::Remote { address } => self.handle_osc(address, &[]),
         };
         self.log.source = "operator";
         let source = match &message {
             ControlMessage::Midi(m) => format!("MIDI {}", m.trigger().describe()),
             ControlMessage::Osc { address, .. } => format!("OSC {address}"),
+            ControlMessage::Remote { address } => format!("Remote {address}"),
         };
         if let Some(outcome) = outcome {
             self.last_control = Some(format!("{source} → {outcome}"));

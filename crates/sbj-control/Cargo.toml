@@ -16,3 +16,7 @@ midir = "0.11.1"
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+sbj-backend.workspace = true
+sbj-engine.workspace = true

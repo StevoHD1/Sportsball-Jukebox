@@ -398,6 +398,8 @@ struct SessionStatus: Decodable, Equatable {
     /// nil when MIDI input is off.
     var midiInputs: [String]?
     var oscPort: Int?
+    /// nil when the phone/tablet remote is off.
+    var remotePort: Int?
     var dirty: Bool
     var path: String?
     var outputs: [OutputState]

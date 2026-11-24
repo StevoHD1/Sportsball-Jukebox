@@ -1,6 +1,6 @@
 # Sportsball Jukebox: Architecture
 
-Status: Phase 7 (game log and reports). Last updated 2026-11-24.
+Status: Phase 8 (phone/tablet remote). Last updated 2026-11-24.
 
 ## Goals, in priority order
 
@@ -275,6 +275,18 @@ next MIDI message to a pad or a show-wide control (Stop All, next/previous
 bank). See `docs/control.md` for the OSC address space and Stream Deck
 setup.
 
+**Phone/tablet remote** (`sbj-control/src/remote.rs`, Phase 8): a small
+HTTP/1.1 server written on `std` (no web framework): an accept thread
+and a short-lived thread per connection, `Connection: close`, 16 KiB
+request limit, 5 s timeouts, at most 32 connections. `/` serves an
+embedded page (`remote.html`, plain JS that polls `GET /api/state`);
+`/api/*` needs the PIN header, compared in constant time, with wrong
+guesses delayed and serialised. Requests go to `Session::handle_remote`
+(`sbj-session/src/remote.rs`) under the session lock, which maps button
+presses to `ControlMessage::Remote` with an OSC address, so the remote
+shares OSC's code path, logging and control footer. The FFI handler
+holds only a weak reference to the session, like the MIDI/OSC sink.
+
 **Pre-game check** (`Session::preflight`): output devices, backups, glitch
 counts, per-pad problems, pads that can't play, duplicate keys (per bank)
 and MIDI triggers, and memory used by decoded audio. Each item is an
@@ -345,7 +357,7 @@ and the cue plays on all channels.
 `sbj-session/src/log.rs` records each time a pad or playlist song starts:
 the time, game name, show, bank and pad, title, the audio file, the
 sponsor (a per-pad field), the output, and what triggered it (`operator`,
-`midi`, `osc`, or `auto` for playlist auto-advance). Entries close when
+`midi`, `osc`, `remote`, or `auto` for playlist auto-advance). Entries close when
 the sound stops, finishes or is replaced, and the time played is
 measured on the wall clock. Closed entries are appended as JSON lines to
 `<log dir>/YYYY-MM-DD.jsonl` (UTC days) straight away, so a crash loses
@@ -475,7 +487,10 @@ CI.
 - Game name stamped on entries; per-pad sponsor.
 - Game Log window: plays, song totals, sponsor totals, CSV export.
 
+**Phase 8: Phone/tablet remote (built; awaiting Mac testing)**
+- Web page served by the app on the local network: banks, pads with
+  colours and progress, Now Playing with countdowns, Stop, GO, Stop All.
+- 6-digit PIN, QR code that signs in, presses logged as `remote`.
+
 **Next candidates**
-- Remote control from a phone or tablet (a small web page served by the
-  app over the local network).
 - Signed releases once there is a Developer account.

@@ -70,10 +70,13 @@ struct ScreenshotDirector {
             model.showingPreflight = false
             await wait(seconds: 1)
 
+            let remoteWasOn = model.remoteEnabled
+            model.remoteEnabled = true
             model.showingControls = true
             await wait(seconds: 1.5)
-            capture(sheetWindow(), "5-midi-osc")
+            capture(sheetWindow(), "5-control")
             model.showingControls = false
+            model.remoteEnabled = remoteWasOn
             await wait(seconds: 1)
 
             model.setGame("vs. Tigers")

@@ -6,6 +6,7 @@
 
 pub mod midi;
 pub mod osc;
+pub mod remote;
 
 use std::sync::Arc;
 

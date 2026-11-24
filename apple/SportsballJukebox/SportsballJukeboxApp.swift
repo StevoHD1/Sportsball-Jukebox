@@ -26,7 +26,7 @@ struct SportsballJukeboxApp: App {
             CommandMenu("Show") {
                 Button("Audio Outputs…") { model.showingOutputs = true }
                     .keyboardShortcut("u", modifiers: [.command, .shift])
-                Button("MIDI & OSC…") { model.showingControls = true }
+                Button("Control (MIDI, OSC, Remote)…") { model.showingControls = true }
                     .keyboardShortcut("m", modifiers: [.command, .shift])
                 Button("Show Settings…") { model.showingSettings = true }
                 Button(model.showingNowPlaying ? "Hide Now Playing" : "Show Now Playing") {

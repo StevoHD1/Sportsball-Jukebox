@@ -5,14 +5,19 @@ as a native macOS app. Inspired by Sports Sounds Pro, it adds
 sample-accurate timeline markers with actions (loop, jump, pause, fade) and
 support for several audio interfaces at once.
 
-**Status:** Phase 3. A Mac app with:
+**Status:** Phase 8, awaiting testing on a Mac. A Mac app with:
 - a configurable pad grid with hotkeys and colours;
 - show files that autosave;
 - several audio interfaces at once, with automatic failover to a backup;
 - a pad editor with a waveform timeline and markers that jump, loop,
   pause, stop or fade, with click-free crossfades at every jump;
 - banks of pads, MIDI triggers with learn, OSC network control (and so
-  Stream Deck), and a pre-game check.
+  Stream Deck), and a pre-game check;
+- vamps, exclusive groups, ducking, playlists with crossfades, and
+  per-pad fades;
+- a Now Playing panel and headphone preview;
+- a game log with song and sponsor totals;
+- a phone/tablet remote served by the app over the local network.
 
 Requires macOS 14.2+. See [docs/architecture.md](docs/architecture.md),
 and [docs/testing-on-mac.md](docs/testing-on-mac.md) to try it.
@@ -28,6 +33,8 @@ Captured automatically by CI from a generated demo show
 | Pads, banks and live playback | Pad editor: waveform timeline and markers |
 | ![Outputs](docs/screenshots/3-outputs.png) | ![Pre-game check](docs/screenshots/4-pregame-check.png) |
 | Outputs with backup devices | Pre-game check |
+| ![Phone remote](docs/screenshots/7-remote-phone.png) | ![Tablet remote](docs/screenshots/8-remote-tablet.png) |
+| Phone remote (web page served by the app) | Tablet remote |
 
 ## Layout
 
@@ -38,7 +45,7 @@ crates/
   sbj-backend/   audio devices: Core Audio (via cpal) + offline backend for tests
   sbj-media/     file decoding and sample-rate conversion
   sbj-session/   app model: shows, outputs, cues, banks, MIDI/OSC mapping, pre-game check
-  sbj-control/   MIDI (CoreMIDI) and OSC (UDP) listeners
+  sbj-control/   MIDI (CoreMIDI) and OSC (UDP) listeners, phone/tablet remote (HTTP)
   sbj-ffi/       C ABI for the Swift app (header in include/)
 scripts/         build helpers (Rust engine → universal static library)
 docs/            architecture, Mac testing guide, MIDI/OSC/Stream Deck, releasing

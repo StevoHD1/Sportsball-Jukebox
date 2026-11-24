@@ -28,6 +28,7 @@ use sbj_backend::{AudioBackend, DeviceInfo};
 use sbj_control::Sink;
 use sbj_control::midi::MidiListener;
 use sbj_control::osc::OscListener;
+use sbj_control::remote::{Handler, RemoteServer, Reply};
 use sbj_engine::EngineError;
 use sbj_session::{
     CheckLevel, CueDoc, DecodeReport, LearnTarget, OutputDoc, OutputStatus, Session, SessionError,
@@ -101,6 +102,7 @@ struct Shared {
 struct Listeners {
     midi: Option<MidiListener>,
     osc: Option<OscListener>,
+    remote: Option<RemoteServer>,
 }
 
 impl Shared {
@@ -138,6 +140,23 @@ impl SbjSession {
                 // Never let a panic escape into CoreMIDI's thread.
                 let _ = catch_unwind(AssertUnwindSafe(|| shared.lock().handle_control(message)));
             }
+        })
+    }
+
+    /// Answers the phone/tablet remote's API requests. Weak, like `sink`.
+    fn remote_handler(&self) -> Handler {
+        let shared = Arc::downgrade(&self.shared);
+        Arc::new(move |method, path| {
+            let Some(shared) = shared.upgrade() else {
+                return Reply::error(503, "the app is closing");
+            };
+            catch_unwind(AssertUnwindSafe(|| {
+                match shared.lock().handle_remote(method, path) {
+                    Ok(state) => Reply::json(state.to_string()),
+                    Err(e) => Reply::error(e.status, &e.message),
+                }
+            }))
+            .unwrap_or_else(|_| Reply::error(500, "internal error"))
         })
     }
 }
@@ -498,11 +517,12 @@ pub unsafe extern "C" fn sbj_session_status_json(session: *const SbjSession) -> 
         session_string(session, |s| {
             // Lock order: listeners, then session (never the reverse; MIDI
             // callbacks hold the session while listeners are torn down).
-            let (midi_inputs, osc_port) = {
+            let (midi_inputs, osc_port, remote_port) = {
                 let listeners = s.listeners();
                 (
                     listeners.midi.as_ref().map(|m| m.inputs().to_vec()),
                     listeners.osc.as_ref().map(OscListener::port),
+                    listeners.remote.as_ref().map(RemoteServer::port),
                 )
             };
             let mut session = s.lock();
@@ -547,6 +567,7 @@ pub unsafe extern "C" fn sbj_session_status_json(session: *const SbjSession) -> 
                 "last_control": session.last_control(),
                 "midi_inputs": midi_inputs,
                 "osc_port": osc_port,
+                "remote_port": remote_port,
                 "dirty": session.is_dirty(),
                 "path": session.show_path().map(|p| p.display().to_string()),
                 "outputs": outputs,
@@ -748,6 +769,53 @@ pub unsafe extern "C" fn sbj_session_set_osc_port(
                 Err(e) => fail(
                     SbjStatus::DeviceError,
                     format!("cannot listen on port {port}: {e}"),
+                ),
+            }
+        })
+    }
+}
+
+/// Serves the phone/tablet remote page on TCP `port` (all interfaces),
+/// guarded by `pin` (4–12 digits), or stops it if `port` is 0 (`pin` may
+/// then be null).
+///
+/// # Safety
+/// `session` must be null or a live session; `pin` null or a valid string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sbj_session_set_remote(
+    session: *const SbjSession,
+    port: u16,
+    pin: *const c_char,
+) -> SbjStatus {
+    // SAFETY: forwarded caller contract.
+    let pin = match unsafe { read_str(pin) } {
+        Ok(p) => p.map(str::to_owned),
+        Err(status) => return status,
+    };
+    // SAFETY: forwarded caller contract.
+    unsafe {
+        with_session(session, |s| {
+            // Stop the old server outside any lock (it joins its thread,
+            // which may be waiting for the session lock).
+            let old = s.listeners().remote.take();
+            drop(old);
+            if port == 0 {
+                return SbjStatus::Ok;
+            }
+            let Some(pin) = pin else {
+                return fail(SbjStatus::NullPointer, "pin is null");
+            };
+            if !(4..=12).contains(&pin.len()) || !pin.bytes().all(|b| b.is_ascii_digit()) {
+                return fail(SbjStatus::InvalidArgument, "the PIN must be 4 to 12 digits");
+            }
+            match RemoteServer::start(port, pin, s.remote_handler()) {
+                Ok(server) => {
+                    s.listeners().remote = Some(server);
+                    SbjStatus::Ok
+                }
+                Err(e) => fail(
+                    SbjStatus::DeviceError,
+                    format!("cannot serve the remote on port {port}: {e}"),
                 ),
             }
         })
@@ -1364,6 +1432,65 @@ mod tests {
                 SbjStatus::InvalidArgument,
                 "no file yet"
             );
+            sbj_session_destroy(s);
+        }
+    }
+
+    #[test]
+    fn remote_reaches_the_session() {
+        use std::io::{Read, Write};
+        use std::net::{TcpListener, TcpStream};
+        unsafe {
+            let s = sbj_session_create();
+            let settings = cr#"{"name":"T","slots":4,"columns":4,"banks":["A","B","C"]}"#;
+            assert_eq!(
+                sbj_session_set_show_settings_json(s, settings.as_ptr()),
+                SbjStatus::Ok
+            );
+            assert_eq!(
+                sbj_session_set_remote(s, 9, c"12ab".as_ptr()),
+                SbjStatus::InvalidArgument
+            );
+            assert_eq!(
+                sbj_session_set_remote(s, 9, std::ptr::null()),
+                SbjStatus::NullPointer
+            );
+            let port = TcpListener::bind("127.0.0.1:0")
+                .unwrap()
+                .local_addr()
+                .unwrap()
+                .port();
+            assert_eq!(
+                sbj_session_set_remote(s, port, c"4321".as_ptr()),
+                SbjStatus::Ok
+            );
+            let status = || -> serde_json::Value {
+                serde_json::from_str(&take(sbj_session_status_json(s))).unwrap()
+            };
+            assert_eq!(status()["remote_port"], port);
+
+            let call = |request: &str| -> String {
+                let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+                stream.write_all(request.as_bytes()).unwrap();
+                let mut response = String::new();
+                stream.read_to_string(&mut response).unwrap();
+                response
+            };
+            let reply = call("POST /api/bank/3 HTTP/1.1\r\nX-SBJ-PIN: 4321\r\n\r\n");
+            assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
+            assert!(reply.contains("\"bank\":2"), "{reply}");
+            let st = status();
+            assert_eq!(st["bank"], 2);
+            assert!(st["last_control"].as_str().unwrap().starts_with("Remote "));
+            let reply = call("POST /api/fire/99 HTTP/1.1\r\nX-SBJ-PIN: 4321\r\n\r\n");
+            assert!(reply.starts_with("HTTP/1.1 404"), "{reply}");
+
+            assert_eq!(
+                sbj_session_set_remote(s, 0, std::ptr::null()),
+                SbjStatus::Ok
+            );
+            assert!(status()["remote_port"].is_null());
+            assert!(TcpStream::connect(("127.0.0.1", port)).is_err());
             sbj_session_destroy(s);
         }
     }

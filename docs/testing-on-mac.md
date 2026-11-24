@@ -114,7 +114,7 @@ built-in speakers or headphones)
       click at the jump.
 - [ ] Show → Show Settings: add a second bank. Switch with the tabs and
       ⌘1/⌘2; each bank's keys fire only its own pads.
-- [ ] Plug in any MIDI controller. Show → MIDI & OSC shows it. Right-click
+- [ ] Plug in any MIDI controller. Show → Control shows it. Right-click
       a pad → Learn MIDI Trigger → hit a pad on the controller: the pad
       gets a 🎹 badge and that control now fires it. The bottom bar shows
       what each message did.
@@ -174,6 +174,20 @@ built-in speakers or headphones)
 - [ ] Export CSV and open it in Numbers or Excel.
 - [ ] Open Log Folder: today's file contains a line per play, even after
       quitting.
+
+**Phase 8: phone/tablet remote** (needs a phone on the same Wi-Fi)
+- [ ] Show → Control → turn on the remote. If macOS asks about incoming
+      connections, Allow. The window shows an address, a PIN and a QR code.
+- [ ] Scan the QR code with the phone camera: the page opens without
+      asking for the PIN and shows the pads in their colours.
+- [ ] Tap pads: they fire on the Mac within a fraction of a second; the
+      Mac's bottom bar says "Remote …".
+- [ ] Switch banks on the phone: the Mac follows.
+- [ ] Now Playing rows count down; Stop stops a pad; STOP ALL fades all.
+- [ ] Press New PIN on the Mac: the phone asks for the PIN; the old one
+      no longer works.
+- [ ] Game Log: remote presses are listed with the source "remote".
+- [ ] Turn the remote off: the phone shows "Offline — retrying".
 
 **Stress**
 - [ ] Leave a looping cue running for 10+ minutes. The status line should
