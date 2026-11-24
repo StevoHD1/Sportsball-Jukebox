@@ -2,6 +2,9 @@ name: CI
 
 on:
   push:
+    branches: ["**"]
+    # A version tag (v0.1.0) builds the installer and publishes a release.
+    tags: ["v*"]
   pull_request:
   workflow_dispatch:
 
@@ -35,15 +38,18 @@ jobs:
           ./smoke
 
   # macOS minutes cost 10x on private repos, so this runs only for pull
-  # requests, pushes to main, and manual runs (Actions tab -> Run workflow).
+  # requests, pushes to main, version tags, and manual runs (Actions tab
+  # -> Run workflow).
   macos:
     name: Test and build app (macOS)
     needs: linux
-    if: github.event_name != 'push' || github.ref == 'refs/heads/main'
+    if: >-
+      github.event_name != 'push' || github.ref == 'refs/heads/main' ||
+      startsWith(github.ref, 'refs/tags/v')
     runs-on: macos-15
     timeout-minutes: 30
     permissions:
-      contents: write  # manual runs commit refreshed screenshots
+      contents: write  # manual runs commit screenshots; tags publish releases
     env:
       MACOSX_DEPLOYMENT_TARGET: "14.2"
     steps:
@@ -65,12 +71,23 @@ jobs:
         run: |
           brew install xcodegen
           cd apple && xcodegen generate
+      - name: Version
+        run: |
+          # v1.2.3 tags set the version; other builds are 0.1.0 + build number.
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            version="${GITHUB_REF_NAME#v}"
+          else
+            version="$(sed -n 's/^ *MARKETING_VERSION: "\(.*\)"/\1/p' apple/project.yml)"
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          echo "Version $version, build $GITHUB_RUN_NUMBER"
       - name: Build app (universal, ad-hoc signed)
         run: |
           xcodebuild -project apple/SportsballJukebox.xcodeproj \
             -scheme SportsballJukebox -configuration Release \
             -derivedDataPath apple/build \
             ARCHS="arm64 x86_64" ONLY_ACTIVE_ARCH=NO \
+            MARKETING_VERSION="$VERSION" CURRENT_PROJECT_VERSION="$GITHUB_RUN_NUMBER" \
             build > xcodebuild.log 2>&1 || {
               grep -E "error:" xcodebuild.log | head -100
               tail -40 xcodebuild.log
@@ -78,18 +95,35 @@ jobs:
             }
           grep -E "warning:" xcodebuild.log | sort -u | head -50 || true
           tail -3 xcodebuild.log
-      - name: Package app
+      - name: Package app (installer disk image)
         run: |
           app="apple/build/Build/Products/Release/Sportsball Jukebox.app"
           lipo -info "$app/Contents/MacOS/Sportsball Jukebox"
           codesign --verify --verbose "$app"
-          mkdir -p dist
-          ditto -c -k --keepParent "$app" "dist/Sportsball-Jukebox-${GITHUB_SHA::7}.zip"
+          test -f "$app/Contents/Resources/AppIcon.icns" || { echo "app icon missing"; exit 1; }
+          /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" -c "Print :CFBundleVersion" \
+            -c "Print :NSLocalNetworkUsageDescription" "$app/Contents/Info.plist"
+          scripts/make-dmg.sh "$app" "dist/Sportsball-Jukebox-$VERSION.dmg"
       - uses: actions/upload-artifact@v4
         with:
           name: Sportsball-Jukebox-macOS
-          path: dist/*.zip
+          path: dist/*.dmg
           retention-days: 30
+      - name: Publish release (version tags only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # A tag with a suffix (v0.2.0-beta.1) is marked as a pre-release.
+          prerelease=""
+          [[ "$GITHUB_REF_NAME" == *-* ]] && prerelease="--prerelease"
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            # Made on github.com ("Create new tag on publish"): attach.
+            gh release upload "$GITHUB_REF_NAME" dist/*.dmg --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" dist/*.dmg $prerelease \
+              --title "Sportsball Jukebox $VERSION" --notes-file docs/install.md
+          fi
       - name: Screenshots (demo show, synthesised audio)
         run: scripts/make-screenshots.sh "apple/build/Build/Products/Release/Sportsball Jukebox.app" screenshots
       - uses: actions/upload-artifact@v4

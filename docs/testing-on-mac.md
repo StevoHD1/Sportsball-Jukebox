@@ -8,14 +8,19 @@ this page).
 
 ## 1. Download the app
 
+If there is a release (GitHub → **Releases**), download its
+`Sportsball-Jukebox-<version>.dmg`. Otherwise:
+
 1. On GitHub, open the repo → **Actions** → **CI**.
 2. Pick a run with a green **Test and build app (macOS)** job. To build a
    branch on demand: **Run workflow**, choose the branch, run it, and wait
    about 10 minutes.
-3. Under **Artifacts**, download **Sportsball-Jukebox-macOS**. It's a zip
-   that contains another zip; double-click until you get
-   `Sportsball Jukebox.app`.
-4. Drag the app to **Applications** (optional).
+3. Under **Artifacts**, download **Sportsball-Jukebox-macOS** (a zip) and
+   double-click it to get `Sportsball-Jukebox-<version>.dmg`.
+
+Open the disk image and drag **Sportsball Jukebox** onto **Applications**.
+(`docs/install.md` is the short version of this page for anyone you
+give the app to.)
 
 ## 2. Open it the first time
 
@@ -33,6 +38,9 @@ xattr -dr com.apple.quarantine "/Applications/Sportsball Jukebox.app"
 ```
 
 You only need to do this once for each downloaded build.
+
+If macOS asks whether Sportsball Jukebox may find devices on your local
+network, click **Allow** (the phone remote and OSC need it).
 
 ## 3. Test checklist
 

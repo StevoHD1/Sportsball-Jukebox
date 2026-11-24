@@ -24,8 +24,9 @@ support for several audio interfaces at once.
 - a game rundown fired step by step with GO (Space, MIDI, OSC or the
   phone remote).
 
-Requires macOS 14.2+. See [docs/architecture.md](docs/architecture.md),
-and [docs/testing-on-mac.md](docs/testing-on-mac.md) to try it.
+Requires macOS 14.2+. To install, see [docs/install.md](docs/install.md);
+to try everything, [docs/testing-on-mac.md](docs/testing-on-mac.md). The
+design is in [docs/architecture.md](docs/architecture.md).
 
 ## Screenshots
 

@@ -1,3 +1,11 @@
+# Releases
+
+Pushing a version tag (`git tag v0.1.0 && git push origin v0.1.0`)
+builds, tests and publishes `Sportsball-Jukebox-0.1.0.dmg` as a GitHub
+Release; see `docs/install.md`. The version comes from the tag, and the
+build number from the CI run. Every other macOS CI run uploads the same
+disk image as an artifact.
+
 # Signing and notarizing (when there is an Apple Developer account)
 
 Today CI produces an **ad-hoc signed** app. It runs on Apple Silicon and

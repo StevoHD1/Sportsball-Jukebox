@@ -32,10 +32,14 @@ targets:
         LSApplicationCategoryType: public.app-category.music
         LSMinimumSystemVersion: $(MACOSX_DEPLOYMENT_TARGET)
         NSHighResolutionCapable: true
+        # macOS 15 asks before an app uses the local network (the phone
+        # remote, OSC); this is the explanation shown in that prompt.
+        NSLocalNetworkUsageDescription: Sportsball Jukebox uses your local network so phones, tablets, Stream Deck and OSC controllers can fire pads.
     settings:
       base:
         PRODUCT_NAME: Sportsball Jukebox
         PRODUCT_BUNDLE_IDENTIFIER: com.sportsballjukebox.app
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         # Rust engine (built by the pre-build script) and its C module.
         SWIFT_INCLUDE_PATHS: $(SRCROOT)/SbjEngineC
         LIBRARY_SEARCH_PATHS: $(SRCROOT)/../target/apple
