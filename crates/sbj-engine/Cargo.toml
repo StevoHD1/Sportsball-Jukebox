@@ -1,0 +1,13 @@
+[package]
+name = "sbj-engine"
+description = "Real-time playback engine for Sportsball Jukebox: timeline, markers, mixing."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+rtrb.workspace = true
+
+[lints]
+workspace = true

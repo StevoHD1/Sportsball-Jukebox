@@ -1,0 +1,15 @@
+[package]
+name = "sbj-backend"
+description = "Audio device abstraction for Sportsball Jukebox, plus an offline backend for tests."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+
+[dev-dependencies]
+sbj-engine.workspace = true
+
+[lints]
+workspace = true

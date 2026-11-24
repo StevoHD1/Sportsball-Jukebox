@@ -1,0 +1,415 @@
+//! Sample-accurate behaviour of timeline markers and transport, verified by
+//! offline rendering. Every scenario is run at several block sizes.
+
+mod common;
+
+use common::*;
+use sbj_engine::{
+    Clip, Event, Fade, FadeCurve, LoopCount, Marker, MarkerAction, MarkerId, Timeline,
+};
+
+fn concat(parts: &[Vec<f32>]) -> Vec<f32> {
+    parts.concat()
+}
+
+/// Loads `timeline`, presses play, and returns everything rendered until
+/// playback stops.
+fn play(timeline: &Timeline, block: usize) -> Vec<f32> {
+    let (mut c, mut r) = engine(1);
+    c.load_timeline(timeline.clone()).unwrap();
+    c.play().unwrap();
+    render_until_stopped(&c, &mut r, block, 1_000_000)
+}
+
+#[test]
+fn plays_clip_then_stops_at_end() {
+    let t = Timeline::builder(RATE)
+        .clip(Clip::new(ramp_buffer(1000)))
+        .build()
+        .unwrap();
+    for &block in BLOCK_SIZES {
+        assert_eq!(play(&t, block), ramp(0..1000), "block {block}");
+    }
+}
+
+#[test]
+fn clip_placement_and_trim() {
+    // Frames 100..300 of the source, placed at timeline position 50.
+    let t = Timeline::builder(RATE)
+        .clip(Clip::new(ramp_buffer(1000)).trimmed(100, 200).at(50))
+        .build()
+        .unwrap();
+    let (mut c, mut r) = engine(1);
+    c.load_timeline(t).unwrap();
+    c.play().unwrap();
+    let out = render(&mut r, 300, 64);
+    assert_eq!(&out[..50], &[0.0; 50]);
+    assert_eq!(&out[50..250], ramp(100..300).as_slice());
+    assert!(!c.is_playing(), "stops at end of timeline (250)");
+}
+
+#[test]
+fn jump_marker_moves_playhead_sample_exactly() {
+    let t = Timeline::builder(RATE)
+        .clip(Clip::new(ramp_buffer(1000)))
+        .marker(Marker::new(1, 300, MarkerAction::Jump { to: 700 }))
+        .build()
+        .unwrap();
+    for &block in BLOCK_SIZES {
+        assert_eq!(
+            play(&t, block),
+            concat(&[ramp(0..300), ramp(700..1000)]),
+            "block {block}"
+        );
+    }
+}
+
+#[test]
+fn loop_repeats_n_times_then_continues() {
+    // The headline feature: marker at 600 loops back to 200 twice.
+    let t = Timeline::builder(RATE)
+        .clip(Clip::new(ramp_buffer(1000)))
+        .marker(Marker::new(
+            1,
+            600,
+            MarkerAction::Loop {
+                to: 200,
+                count: LoopCount::Times(2),
+            },
+        ))
+        .build()
+        .unwrap();
+    let expected = concat(&[
+        ramp(0..600),
+        ramp(200..600),
+        ramp(200..600),
+        ramp(600..1000),
+    ]);
+    for &block in BLOCK_SIZES {
+        assert_eq!(play(&t, block), expected, "block {block}");
+    }
+}
+
+#[test]
+fn infinite_loop_runs_until_operator_intervenes() {
+    let t = Timeline::builder(RATE)
+        .clip(Clip::new(ramp_buffer(1000)))
+        .marker(Marker::new(
+            1,
+            500,
+            MarkerAction::Loop {
+                to: 400,
+                count: LoopCount::Infinite,
+            },
+        ))
+        .build()
+        .unwrap();
+    let (mut c, mut r) = engine(1);
+    c.load_timeline(t).unwrap();
+    c.play().unwrap();
+    let out = render(&mut r, 500 + 100 * 50, 64);
+    let mut expected = ramp(0..500);
+    for _ in 0..50 {
+        expected.extend(ramp(400..500));
+    }
+    assert_eq!(out, expected);
+    assert!(c.is_playing());
+
+    c.stop().unwrap();
+    render(&mut r, 64, 64);
+    assert!(!c.is_playing());
+    assert_eq!(c.position(), 0);
+}
+
+#[test]
+fn nested_loops_rearm_like_musical_repeats() {
+    // Inner loop: 300 -> 200 once. Outer loop: 500 -> 100 once.
+    // Inner counter re-arms when passed, so it repeats on the outer pass.
+    let t = Timeline::builder(RATE)
+        .clip(Clip::new(ramp_buffer(600)))
+        .marker(Marker::new(
+            1,
+            300,
+            MarkerAction::Loop {
+                to: 200,
+                count: LoopCount::Times(1),
+            },
+        ))
+        .marker(Marker::new(
+            2,
+            500,
+            MarkerAction::Loop {
+                to: 100,
+                count: LoopCount::Times(1),
+            },
+        ))
+        .build()
+        .unwrap();
+    let expected = concat(&[ramp(0..300), ramp(200..500), ramp(100..300), ramp(200..600)]);
+    for &block in BLOCK_SIZES {
+        assert_eq!(play(&t, block), expected, "block {block}");
+    }
+}
+
+#[test]
+fn markers_at_jump_landing_do_not_fire() {
+    // The loop lands on a Stop marker; the stop must be skipped, otherwise a
+    // jump to another marker could create surprising chains or loops.
+    let t = Timeline::builder(RATE)
+        .clip(Clip::new(ramp_buffer(1000)))
+        .marker(Marker::new(1, 100, MarkerAction::Stop))
+        .marker(Marker::new(
+            2,
+            400,
+            MarkerAction::Loop {
+                to: 100,
+                count: LoopCount::Times(1),
+            },
+        ))
+        .marker(Marker::new(3, 600, MarkerAction::Stop))
+        .build()
+        .unwrap();
+    let (mut c, mut r) = engine(1);
+    c.load_timeline(t).unwrap();
+    c.seek(101).unwrap();
+    c.play().unwrap();
+    let out = render_until_stopped(&c, &mut r, 64, 10_000);
+    assert_eq!(out, concat(&[ramp(101..400), ramp(100..600)]));
+}
+
+#[test]
+fn self_targeting_jump_cannot_hang() {
+    let t = Timeline::builder(RATE)
+        .clip(Clip::new(ramp_buffer(300)))
+        .marker(Marker::new(1, 100, MarkerAction::Jump { to: 100 }))
+        .build()
+        .unwrap();
+    assert_eq!(play(&t, 64), ramp(0..300));
+}
+
+#[test]
+fn pause_marker_halts_and_resume_continues_past_it() {
+    let t = Timeline::builder(RATE)
+        .clip(Clip::new(ramp_buffer(1000)))
+        .marker(Marker::new(7, 250, MarkerAction::Pause))
+        .build()
+        .unwrap();
+    for &block in BLOCK_SIZES {
+        let (mut c, mut r) = engine(1);
+        c.load_timeline(t.clone()).unwrap();
+        c.play().unwrap();
+        assert_eq!(
+            render_until_stopped(&c, &mut r, block, 10_000),
+            ramp(0..250)
+        );
+        assert_eq!(c.position(), 250);
+
+        c.play().unwrap();
+        assert_eq!(
+            render_until_stopped(&c, &mut r, block, 10_000),
+            ramp(250..1000),
+            "block {block}"
+        );
+    }
+}
+
+#[test]
+fn stop_marker_rewinds() {
+    let t = Timeline::builder(RATE)
+        .clip(Clip::new(ramp_buffer(1000)))
+        .marker(Marker::new(1, 400, MarkerAction::Stop))
+        .build()
+        .unwrap();
+    let (mut c, mut r) = engine(1);
+    c.load_timeline(t).unwrap();
+    c.play().unwrap();
+    assert_eq!(render_until_stopped(&c, &mut r, 64, 10_000), ramp(0..400));
+    assert_eq!(c.position(), 0);
+}
+
+#[test]
+fn fade_out_marker_reaches_silence_and_stops_exactly() {
+    let t = Timeline::builder(RATE)
+        .clip(Clip::new(ramp_buffer(1000)))
+        .marker(Marker::new(1, 200, MarkerAction::FadeOut { length: 100 }))
+        .build()
+        .unwrap();
+    for &block in BLOCK_SIZES {
+        let out = play(&t, block);
+        assert_eq!(out.len(), 300, "block {block}");
+        assert_eq!(&out[..200], ramp(0..200).as_slice());
+        // Gain goes 100/100, 99/100, ... 1/100 over frames 200..300.
+        for (k, &s) in out[200..].iter().enumerate() {
+            let expected = (201 + k) as f32 * (100 - k) as f32 / 100.0;
+            assert!(
+                (s - expected).abs() < 1e-3,
+                "frame {} block {block}",
+                200 + k
+            );
+        }
+    }
+}
+
+#[test]
+fn several_markers_at_one_position_fire_in_order() {
+    // FadeOut starts, then Jump moves the playhead: both take effect.
+    let t = Timeline::builder(RATE)
+        .clip(Clip::new(ramp_buffer(1000)))
+        .marker(Marker::new(1, 100, MarkerAction::FadeOut { length: 50 }))
+        .marker(Marker::new(2, 100, MarkerAction::Jump { to: 800 }))
+        .build()
+        .unwrap();
+    let (mut c, mut r) = engine(1);
+    c.load_timeline(t).unwrap();
+    c.play().unwrap();
+    let out = render_until_stopped(&c, &mut r, 64, 10_000);
+    assert_eq!(out.len(), 150);
+    assert_eq!(out[100], 801.0);
+    assert!(!c.is_playing());
+
+    let fired: Vec<_> = events(&mut c)
+        .into_iter()
+        .filter_map(|e| match e {
+            Event::MarkerReached { marker, .. } => Some(marker),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(fired, vec![MarkerId(1), MarkerId(2)]);
+}
+
+#[test]
+fn transport_events() {
+    let t = Timeline::builder(RATE)
+        .clip(Clip::new(ramp_buffer(100)))
+        .marker(Marker::new(9, 50, MarkerAction::Jump { to: 60 }))
+        .build()
+        .unwrap();
+    let (mut c, mut r) = engine(1);
+    c.load_timeline(t).unwrap();
+    c.play().unwrap();
+    render(&mut r, 200, 64);
+    assert_eq!(
+        events(&mut c),
+        vec![
+            Event::TimelineLoaded,
+            Event::Started { position: 0 },
+            Event::MarkerReached {
+                marker: MarkerId(9),
+                position: 50
+            },
+            Event::ReachedEnd,
+        ]
+    );
+}
+
+#[test]
+fn seek_resets_loop_counters() {
+    let t = Timeline::builder(RATE)
+        .clip(Clip::new(ramp_buffer(400)))
+        .marker(Marker::new(
+            1,
+            300,
+            MarkerAction::Loop {
+                to: 200,
+                count: LoopCount::Times(1),
+            },
+        ))
+        .build()
+        .unwrap();
+    let (mut c, mut r) = engine(1);
+    c.load_timeline(t).unwrap();
+    c.seek(250).unwrap();
+    c.play().unwrap();
+    // Play 250..300, loop back once, play 200..250: the loop counter is now
+    // spent. Seeking must re-arm it.
+    render(&mut r, 100, 10);
+    c.seek(250).unwrap();
+    let out = render_until_stopped(&c, &mut r, 10, 10_000);
+    assert_eq!(out, concat(&[ramp(250..300), ramp(200..400)]));
+}
+
+#[test]
+fn clip_fades_and_gain() {
+    let t = Timeline::builder(RATE)
+        .clip(
+            Clip::new(std::sync::Arc::new(
+                sbj_engine::AudioBuffer::from_interleaved(RATE, 1, vec![1.0; 100]).unwrap(),
+            ))
+            .with_gain(0.5)
+            .with_fade_in(Fade::new(10, FadeCurve::Linear))
+            .with_fade_out(Fade::new(20, FadeCurve::Linear)),
+        )
+        .build()
+        .unwrap();
+    let (mut c, mut r) = engine(1);
+    c.load_timeline(t).unwrap();
+    c.play().unwrap();
+    let out = render(&mut r, 100, 33);
+    assert_eq!(out[0], 0.0);
+    assert!((out[5] - 0.25).abs() < 1e-6);
+    assert_eq!(out[50], 0.5);
+    assert!((out[90] - 0.25).abs() < 1e-6);
+    assert!(out[99] > 0.0 && out[99] < 0.05);
+}
+
+#[test]
+fn mono_clips_feed_all_channels_and_stereo_maps_by_channel() {
+    let stereo = std::sync::Arc::new(
+        sbj_engine::AudioBuffer::from_interleaved(RATE, 2, vec![1.0, 2.0, 1.0, 2.0]).unwrap(),
+    );
+    let t = Timeline::builder(RATE)
+        .clip(Clip::new(ramp_buffer(2)))
+        .clip(Clip::new(stereo))
+        .build()
+        .unwrap();
+    let (mut c, mut r) = engine(4);
+    c.load_timeline(t).unwrap();
+    c.play().unwrap();
+    let out = render(&mut r, 2, 2);
+    assert_eq!(out, vec![2.0, 3.0, 1.0, 1.0, 3.0, 4.0, 2.0, 2.0]);
+}
+
+#[test]
+fn master_gain_is_smoothed() {
+    let mut config = sbj_engine::EngineConfig::new(RATE, 1);
+    config.gain_ramp_frames = 10;
+    let (mut c, mut r) = sbj_engine::Engine::create(config).unwrap();
+    let t = Timeline::builder(RATE)
+        .clip(Clip::new(std::sync::Arc::new(
+            sbj_engine::AudioBuffer::from_interleaved(RATE, 1, vec![1.0; 100]).unwrap(),
+        )))
+        .build()
+        .unwrap();
+    c.load_timeline(t).unwrap();
+    c.set_master_gain(0.0).unwrap();
+    c.play().unwrap();
+    let out = render(&mut r, 20, 20);
+    assert!((out[0] - 0.9).abs() < 1e-6);
+    assert!(out.windows(2).take(9).all(|w| w[1] < w[0]));
+    assert!(out[10..].iter().all(|&s| s == 0.0));
+}
+
+#[test]
+fn replacing_timeline_returns_old_one_for_freeing_off_the_audio_thread() {
+    let t = Timeline::builder(RATE)
+        .clip(Clip::new(ramp_buffer(100)))
+        .build()
+        .unwrap();
+    let (mut c, mut r) = engine(1);
+    c.load_timeline(t.clone()).unwrap();
+    render(&mut r, 1, 1);
+    c.load_timeline(t).unwrap();
+    render(&mut r, 1, 1);
+    assert_eq!(c.collect_garbage(), 1);
+    assert_eq!(c.leaked_garbage(), 0);
+}
+
+#[test]
+fn rejects_timeline_with_wrong_sample_rate() {
+    let t = Timeline::builder(44_100).build().unwrap();
+    let (mut c, _r) = engine(1);
+    assert!(matches!(
+        c.load_timeline(t),
+        Err(sbj_engine::EngineError::SampleRateMismatch { .. })
+    ));
+}

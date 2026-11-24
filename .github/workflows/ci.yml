@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  linux:
+    name: Lint and test (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain from rust-toolchain.toml
+        run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+      - name: C API smoke test against the public header
+        run: |
+          cargo build -p sbj-ffi
+          cc -Wall -Wextra -Werror crates/sbj-ffi/tests/smoke.c \
+            -I crates/sbj-ffi/include target/debug/libsbj_ffi.a \
+            -lpthread -ldl -lm -o smoke
+          ./smoke
+
+  # macOS minutes cost 10x on private repos, so this runs only for pull
+  # requests, pushes to main, and manual runs (Actions tab -> Run workflow).
+  macos:
+    name: Test and build (macOS)
+    needs: linux
+    if: github.event_name != 'push' || github.ref == 'refs/heads/main'
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain from rust-toolchain.toml
+        run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --workspace
+      - name: Build universal static library
+        run: |
+          cargo build --release -p sbj-ffi --target aarch64-apple-darwin
+          cargo build --release -p sbj-ffi --target x86_64-apple-darwin
+          mkdir -p dist/include
+          lipo -create \
+            target/aarch64-apple-darwin/release/libsbj_ffi.a \
+            target/x86_64-apple-darwin/release/libsbj_ffi.a \
+            -output dist/libsbj_ffi.a
+          cp crates/sbj-ffi/include/sportsball_jukebox.h dist/include/
+      - name: C API smoke test (native)
+        run: |
+          cc -Wall -Wextra -Werror crates/sbj-ffi/tests/smoke.c \
+            -I dist/include dist/libsbj_ffi.a -o smoke
+          ./smoke
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sbj-engine-macos-universal
+          path: dist/
+          retention-days: 14

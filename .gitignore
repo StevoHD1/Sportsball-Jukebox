@@ -1,0 +1,6 @@
+/target
+*.o
+*.a
+.DS_Store
+xcuserdata/
+DerivedData/
