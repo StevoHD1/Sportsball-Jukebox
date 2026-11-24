@@ -30,6 +30,8 @@ struct ShowDoc: Codable, Equatable {
     var previewOutput: Int?
     /// Target loudness (LUFS) every pad is matched to; nil = off.
     var levelMatch: Double?
+    /// The game's running order, fired step by step with GO.
+    var rundown: [RundownItem] = []
 
     enum CodingKeys: String, CodingKey {
         case format, version, name, slots, columns, banks, outputs, cues, controls
@@ -37,6 +39,7 @@ struct ShowDoc: Codable, Equatable {
         case stopAllFade = "stop_all_fade"
         case previewOutput = "preview_output"
         case levelMatch = "level_match"
+        case rundown
     }
 
     /// Global slot numbers of a bank's pads.
@@ -60,6 +63,7 @@ struct ShowDoc: Codable, Equatable {
         stopAllFade = try c.value(.stopAllFade, or: stopAllFade)
         previewOutput = try c.decodeIfPresent(Int.self, forKey: .previewOutput)
         levelMatch = try c.decodeIfPresent(Double.self, forKey: .levelMatch)
+        rundown = try c.value(.rundown, or: [])
         outputs = try c.value(.outputs, or: outputs)
         cues = try c.value(.cues, or: cues)
     }
@@ -101,11 +105,38 @@ struct ControlsDoc: Codable, Equatable {
     var stopAll: MidiTrigger?
     var nextBank: MidiTrigger?
     var prevBank: MidiTrigger?
+    var rundownGo: MidiTrigger?
 
     enum CodingKeys: String, CodingKey {
         case stopAll = "stop_all"
         case nextBank = "next_bank"
         case prevBank = "prev_bank"
+        case rundownGo = "rundown_go"
+    }
+}
+
+/// One step of the game rundown: a pad to fire, or a note when `pad` is
+/// nil.
+struct RundownItem: Codable, Equatable, Identifiable {
+    var id: UInt64
+    /// Slot of the pad this step fires.
+    var pad: Int?
+    /// A note, or a label shown instead of the pad's title.
+    var text = ""
+
+    enum CodingKeys: String, CodingKey { case id, pad, text }
+
+    init(id: UInt64, pad: Int? = nil, text: String = "") {
+        self.id = id
+        self.pad = pad
+        self.text = text
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UInt64.self, forKey: .id)
+        pad = try c.decodeIfPresent(Int.self, forKey: .pad)
+        text = try c.value(.text, or: "")
     }
 }
 
@@ -428,6 +459,8 @@ struct PreviewInfo: Decodable, Equatable {
 
 struct SessionStatus: Decodable, Equatable {
     var game: String
+    /// Rundown step GO fires next; nil when finished.
+    var standby: Int?
     var previewOutput: Int?
     var preview: PreviewInfo?
     var bank: Int

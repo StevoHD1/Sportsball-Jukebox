@@ -563,6 +563,7 @@ pub unsafe extern "C" fn sbj_session_status_json(session: *const SbjSession) -> 
                 "preview_output": session.show().preview_output,
                 "preview": preview,
                 "bank": session.current_bank(),
+                "standby": session.standby(),
                 "learning": session.learning().map(target_name),
                 "last_control": session.last_control(),
                 "midi_inputs": midi_inputs,
@@ -755,6 +756,83 @@ pub unsafe extern "C" fn sbj_session_sound_info_json(
     }
 }
 
+/// Replaces the game rundown with a JSON array of steps
+/// `[{"id", "pad"?: slot, "text"?: string}]` (a step without a pad is a
+/// note).
+///
+/// # Safety
+/// `session` must be null or a live session; `json` a valid string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sbj_session_set_rundown_json(
+    session: *const SbjSession,
+    json: *const c_char,
+) -> SbjStatus {
+    // SAFETY: forwarded caller contract.
+    let items: Vec<sbj_session::RundownItem> =
+        match unsafe { required_str(json, "json") }.and_then(|j| {
+            serde_json::from_str(j)
+                .map_err(|e| fail(SbjStatus::InvalidArgument, format!("bad rundown: {e}")))
+        }) {
+            Ok(items) => items,
+            Err(status) => return status,
+        };
+    // SAFETY: forwarded caller contract.
+    unsafe { with_session(session, |s| session_status(s.lock().set_rundown(items))) }
+}
+
+/// Fires the rundown's standby step (as pressing its pad does) and moves
+/// standby on. Does nothing when the rundown is finished.
+///
+/// # Safety
+/// `session` must be null or a live session.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sbj_session_rundown_go(session: *const SbjSession) -> SbjStatus {
+    // SAFETY: forwarded caller contract.
+    unsafe {
+        with_session(session, |s| {
+            session_status(s.lock().rundown_go().map(|_| ()))
+        })
+    }
+}
+
+/// Puts rundown step `index` on standby (a note moves on to the next pad
+/// step); a negative index clears standby (finished).
+///
+/// # Safety
+/// `session` must be null or a live session.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sbj_session_set_standby(
+    session: *const SbjSession,
+    index: i32,
+) -> SbjStatus {
+    // SAFETY: forwarded caller contract.
+    unsafe {
+        with_session(session, |s| {
+            s.lock().set_standby(usize::try_from(index).ok());
+            SbjStatus::Ok
+        })
+    }
+}
+
+/// Moves standby to the next (`forward`) or previous pad step without
+/// firing.
+///
+/// # Safety
+/// `session` must be null or a live session.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sbj_session_step_standby(
+    session: *const SbjSession,
+    forward: bool,
+) -> SbjStatus {
+    // SAFETY: forwarded caller contract.
+    unsafe {
+        with_session(session, |s| {
+            s.lock().step_standby(forward);
+            SbjStatus::Ok
+        })
+    }
+}
+
 /// Shows bank `bank` (0-based): hotkeys and OSC pad numbers refer to it.
 ///
 /// # Safety
@@ -885,6 +963,7 @@ fn parse_target(target: &str) -> Option<LearnTarget> {
         "stop_all" => Some(LearnTarget::StopAll),
         "next_bank" => Some(LearnTarget::NextBank),
         "prev_bank" => Some(LearnTarget::PrevBank),
+        "rundown_go" => Some(LearnTarget::RundownGo),
         other => other
             .strip_prefix("cue:")
             .and_then(|n| n.parse().ok())
@@ -897,6 +976,7 @@ fn target_name(target: LearnTarget) -> String {
         LearnTarget::StopAll => "stop_all".into(),
         LearnTarget::NextBank => "next_bank".into(),
         LearnTarget::PrevBank => "prev_bank".into(),
+        LearnTarget::RundownGo => "rundown_go".into(),
         LearnTarget::Cue(slot) => format!("cue:{slot}"),
     }
 }

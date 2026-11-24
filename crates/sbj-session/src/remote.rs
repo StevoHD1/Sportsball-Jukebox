@@ -104,7 +104,28 @@ impl<B: AudioBackend> Session<B> {
             key(a).total_cmp(&key(b))
         });
 
+        let rundown = (!self.show.rundown.is_empty()).then(|| {
+            let steps = self.show.rundown.iter().filter(|i| i.pad.is_some()).count();
+            let done = self.standby.map_or(steps, |s| {
+                self.show.rundown[..s]
+                    .iter()
+                    .filter(|i| i.pad.is_some())
+                    .count()
+            });
+            let next = self
+                .standby
+                .and_then(|s| self.pad_step_from(s + 1))
+                .and_then(|i| self.rundown_label(i));
+            json!({
+                "standby": self.standby.and_then(|i| self.rundown_label(i)),
+                "next": next,
+                "step": done + 1,
+                "steps": steps,
+            })
+        });
+
         json!({
+            "rundown": rundown,
             "show": self.show.name,
             "banks": self.show.banks,
             "bank": self.current_bank,
@@ -136,6 +157,8 @@ impl<B: AudioBackend> Session<B> {
                 let slots = self.show.slots.max(1);
                 format!("/sbj/{verb}/{}/{}", slot / slots + 1, slot % slots + 1)
             }
+            ("POST", ["go"]) => "/sbj/go".into(),
+            ("POST", ["rundown", dir @ ("next" | "prev")]) => format!("/sbj/rundown/{dir}"),
             ("POST", ["stopall"]) => "/sbj/stopall".into(),
             ("POST", ["stopall", "now"]) => "/sbj/stopall/now".into(),
             ("POST", ["bank", n]) => format!("/sbj/bank/{n}"),

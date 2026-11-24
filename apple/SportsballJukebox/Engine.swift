@@ -192,6 +192,25 @@ final class EngineSession: @unchecked Sendable {
         try Engine.check(sbj_session_set_show_settings_json(handle, json))
     }
 
+    // MARK: Rundown
+
+    func setRundown(_ items: [RundownItem]) throws {
+        try Engine.check(sbj_session_set_rundown_json(handle, try ShowDoc.encode(items)))
+    }
+
+    func rundownGo() throws {
+        try Engine.check(sbj_session_rundown_go(handle))
+    }
+
+    /// nil = finished.
+    func setStandby(_ index: Int?) {
+        _ = sbj_session_set_standby(handle, Int32(clamping: index ?? -1))
+    }
+
+    func stepStandby(forward: Bool) {
+        _ = sbj_session_step_standby(handle, forward)
+    }
+
     func setBank(_ bank: Int) throws {
         try Engine.check(sbj_session_set_bank(handle, UInt32(clamping: bank)))
     }

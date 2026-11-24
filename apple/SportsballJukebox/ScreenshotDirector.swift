@@ -49,6 +49,20 @@ struct ScreenshotDirector {
             await wait(seconds: 1.2)
             capture(mainWindow(), "1-pads")
 
+            if !model.show.rundown.isEmpty {
+                let wasShowing = model.showingRundown
+                model.showingRundown = true
+                // Standby on the second step, as if the first was fired.
+                model.setStandby(model.show.rundown.firstIndex { $0.pad != nil })
+                model.stepStandby(forward: true)
+                mainWindow()?.setContentSize(NSSize(width: 1480, height: 760))
+                await wait(seconds: 1)
+                capture(mainWindow(), "9-rundown")
+                model.showingRundown = wasShowing
+                mainWindow()?.setContentSize(NSSize(width: 1280, height: 760))
+                await wait(seconds: 0.5)
+            }
+
             if let edited = model.show.cues.first(where: { !$0.markers.isEmpty }) ?? model.show.cues.first {
                 model.editing = EditTarget(id: edited.slot)
                 await wait(seconds: 3)  // waveforms load in the background

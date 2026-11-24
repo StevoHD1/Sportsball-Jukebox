@@ -31,6 +31,18 @@
   }
   #banks button.current { background: var(--accent); font-weight: 600; }
   #playing { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
+  #rundown {
+    display: none; align-items: center; gap: 10px; background: var(--panel);
+    border-radius: 12px; padding: 10px; margin-bottom: 10px;
+  }
+  #rundown .what { flex: 1; min-width: 0; }
+  #rundown .label { font-size: 12px; color: var(--muted); }
+  #rundown .standby { font-size: 20px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #rundown .next { font-size: 13px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #rundown button { border: 0; border-radius: 10px; color: white; }
+  #rundown .step { background: #3a3b42; padding: 12px; font-size: 16px; }
+  #go { background: var(--playing); font-weight: 800; font-size: 22px; padding: 14px 22px; }
+  #go:disabled { opacity: 0.4; }
   .row {
     display: flex; align-items: center; gap: 10px; background: var(--panel);
     border-radius: 10px; padding: 8px 10px;
@@ -75,6 +87,16 @@
   <button id="stopall">STOP ALL</button>
 </header>
 <nav id="banks"></nav>
+<section id="rundown">
+  <button class="step" id="rd-prev" aria-label="Previous step">◀</button>
+  <div class="what">
+    <div class="label" id="rd-label">Standby</div>
+    <div class="standby" id="rd-standby"></div>
+    <div class="next" id="rd-next"></div>
+  </div>
+  <button class="step" id="rd-next-btn" aria-label="Next step">▶</button>
+  <button id="go">GO</button>
+</section>
 <section id="playing"></section>
 <main id="grid"></main>
 
@@ -121,6 +143,9 @@ document.getElementById("pin-input").addEventListener("keydown", (e) => {
   if (e.key === "Enter") document.getElementById("pin-ok").click();
 });
 document.getElementById("stopall").onclick = () => send("stopall");
+document.getElementById("go").onclick = () => send("go");
+document.getElementById("rd-prev").onclick = () => send("rundown/prev");
+document.getElementById("rd-next-btn").onclick = () => send("rundown/next");
 
 function send(path) {
   if (navigator.vibrate) navigator.vibrate(15);
@@ -149,6 +174,7 @@ function render() {
   if (!state) return;
   document.getElementById("show").textContent = state.show || "Sportsball Jukebox";
   renderBanks();
+  renderRundown();
   renderPlaying();
   renderGrid();
 }
@@ -168,6 +194,19 @@ function renderBanks() {
     }
   }
   Array.from(banks.children).forEach((b, i) => b.classList.toggle("current", i === state.bank));
+}
+
+function renderRundown() {
+  const box = document.getElementById("rundown");
+  const r = state.rundown;
+  box.style.display = r ? "flex" : "none";
+  if (!r) return;
+  const finished = r.standby === null;
+  document.getElementById("rd-label").textContent =
+    finished ? "Rundown" : "Standby · step " + r.step + " of " + r.steps;
+  document.getElementById("rd-standby").textContent = finished ? "Finished" : r.standby;
+  document.getElementById("rd-next").textContent = r.next ? "Next: " + r.next : "";
+  document.getElementById("go").disabled = finished;
 }
 
 function renderPlaying() {

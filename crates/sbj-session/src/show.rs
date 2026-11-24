@@ -111,6 +111,9 @@ pub struct Show {
     /// opts out; `None` = off (each file plays as it is).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub level_match: Option<f64>,
+    /// The game's running order, fired step by step with GO.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rundown: Vec<RundownItem>,
 }
 
 /// Most a quiet file is boosted by level matching, dB.
@@ -180,6 +183,23 @@ pub struct ControlsDoc {
     pub next_bank: Option<MidiTrigger>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prev_bank: Option<MidiTrigger>,
+    /// GO on the rundown: fire the standby step.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rundown_go: Option<MidiTrigger>,
+}
+
+/// One step of the game rundown: a pad to fire, or a note (e.g.
+/// "Timeout 1") when `pad` is `None`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RundownItem {
+    /// Unique within the rundown.
+    pub id: u64,
+    /// Slot of the pad this step fires.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pad: Option<u32>,
+    /// A note, or a label shown instead of the pad's title.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub text: String,
 }
 
 impl Default for Show {
@@ -198,6 +218,7 @@ impl Default for Show {
             stop_all_fade: default_stop_all_fade(),
             preview_output: None,
             level_match: None,
+            rundown: Vec::new(),
         }
     }
 }

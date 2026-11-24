@@ -13,6 +13,11 @@ struct ContentView: View {
                 BankBar()
             }
             HStack(spacing: 0) {
+                if model.showingRundown {
+                    RundownView()
+                        .frame(maxHeight: .infinity)
+                    Divider()
+                }
                 ScrollView {
                     PadGrid()
                         .padding(16)
@@ -102,6 +107,14 @@ private struct HeaderBar: View {
             }
 
             Spacer()
+
+            Button {
+                model.showingRundown.toggle()
+            } label: {
+                Label("Rundown", systemImage: "list.number")
+            }
+            .labelStyle(.iconOnly)
+            .help("Show or hide the game rundown (GO with Space)")
 
             Button {
                 model.showingNowPlaying.toggle()
@@ -312,6 +325,7 @@ private struct ControlFooter: View {
         case "stop_all": return "Stop All"
         case "next_bank": return "Next Bank"
         case "prev_bank": return "Previous Bank"
+        case "rundown_go": return "Rundown GO"
         default:
             let slot = Int(target.dropFirst(4)) ?? 0
             return model.show.cue(at: slot).map { "\"\($0.title)\"" } ?? "pad"

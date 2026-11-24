@@ -47,6 +47,9 @@ final class AppModel: ObservableObject {
     @Published var showingControls = false
     @Published var showingPreflight = false
     @Published var showingLog = false
+    @Published var showingRundown: Bool = UserDefaults.standard.bool(forKey: "showRundown") {
+        didSet { UserDefaults.standard.set(showingRundown, forKey: "showRundown") }
+    }
     @Published var showingNowPlaying: Bool = UserDefaults.standard.object(forKey: "showNowPlaying") as? Bool ?? true {
         didSet { UserDefaults.standard.set(showingNowPlaying, forKey: "showNowPlaying") }
     }
@@ -342,6 +345,71 @@ final class AppModel: ObservableObject {
             soundInfos[file] = session.soundInfo(file: file)
         }
         refreshShow()
+    }
+
+    // MARK: - Rundown
+
+    /// The step GO fires next (nil when finished).
+    var standby: Int? { status?.standby }
+
+    func rundownGo() {
+        report { try session.rundownGo() }
+        refreshStatus()
+    }
+
+    func setStandby(_ index: Int?) {
+        session.setStandby(index)
+        refreshStatus()
+    }
+
+    func stepStandby(forward: Bool) {
+        session.stepStandby(forward: forward)
+        refreshStatus()
+    }
+
+    func setRundown(_ items: [RundownItem]) {
+        report { try session.setRundown(items) }
+        refreshShow()
+    }
+
+    private var nextRundownID: UInt64 {
+        (show.rundown.map(\.id).max() ?? 0) + 1
+    }
+
+    /// Adds a pad (or, with `pad` nil, a note) after the standby step, or
+    /// at the end.
+    func addToRundown(pad: Int?, text: String = "") {
+        var items = show.rundown
+        items.append(RundownItem(id: nextRundownID, pad: pad, text: text))
+        setRundown(items)
+        showingRundown = true
+    }
+
+    func updateRundownItem(_ item: RundownItem) {
+        var items = show.rundown
+        guard let i = items.firstIndex(where: { $0.id == item.id }) else { return }
+        items[i] = item
+        setRundown(items)
+    }
+
+    func removeRundownItems(at offsets: IndexSet) {
+        var items = show.rundown
+        items.remove(atOffsets: offsets)
+        setRundown(items)
+    }
+
+    func moveRundownItems(from: IndexSet, to: Int) {
+        var items = show.rundown
+        items.move(fromOffsets: from, toOffset: to)
+        setRundown(items)
+    }
+
+    /// What a step shows: its text, else its pad's title.
+    func rundownLabel(_ item: RundownItem) -> String {
+        if !item.text.isEmpty { return item.text }
+        guard let pad = item.pad else { return "Note" }
+        guard let cue = show.cue(at: pad) else { return "Empty pad" }
+        return cue.title.isEmpty ? "Pad \(pad % max(show.slots, 1) + 1)" : cue.title
     }
 
     // MARK: - MIDI, OSC, pre-game check

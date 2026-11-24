@@ -5,7 +5,7 @@ as a native macOS app. Inspired by Sports Sounds Pro, it adds
 sample-accurate timeline markers with actions (loop, jump, pause, fade) and
 support for several audio interfaces at once.
 
-**Status:** Phase 10, awaiting testing on a Mac. A Mac app with:
+**Status:** Phase 11, awaiting testing on a Mac. A Mac app with:
 - a configurable pad grid with hotkeys and colours;
 - show files that autosave;
 - several audio interfaces at once, with automatic failover to a backup;
@@ -20,7 +20,9 @@ support for several audio interfaces at once.
 - a game log with song and sponsor totals;
 - a phone/tablet remote served by the app over the local network;
 - level matching (EBU R128) so every pad plays at the same loudness, and
-  automatic trimming of silence at the start of dropped files.
+  automatic trimming of silence at the start of dropped files;
+- a game rundown fired step by step with GO (Space, MIDI, OSC or the
+  phone remote).
 
 Requires macOS 14.2+. See [docs/architecture.md](docs/architecture.md),
 and [docs/testing-on-mac.md](docs/testing-on-mac.md) to try it.

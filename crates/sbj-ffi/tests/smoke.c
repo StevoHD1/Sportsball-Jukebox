@@ -109,6 +109,17 @@ int main(void) {
     CHECK(sbj_session_set_show_settings_json(
               s, "{\"name\":\"Smoke\",\"slots\":12,\"columns\":6,"
                  "\"banks\":[\"Pregame\",\"Game\"]}") == SBJ_STATUS_OK);
+    CHECK(sbj_session_set_rundown_json(s, "[{\"id\":1,\"text\":\"Intro\"},{\"id\":2,\"pad\":3}]")
+          == SBJ_STATUS_OK);
+    CHECK(sbj_session_set_rundown_json(s, "[{\"id\":1},{\"id\":1}]") == SBJ_STATUS_SHOW_ERROR);
+    CHECK(sbj_session_set_standby(s, 0) == SBJ_STATUS_OK);
+    CHECK(sbj_session_step_standby(s, true) == SBJ_STATUS_OK);
+    CHECK(sbj_session_step_standby(s, false) == SBJ_STATUS_OK);
+    SbjStatus go = sbj_session_rundown_go(s); /* no device on Linux CI */
+    CHECK(go == SBJ_STATUS_OK || go == SBJ_STATUS_NO_OUTPUT);
+    if (go == SBJ_STATUS_OK) {
+        CHECK(sbj_session_rundown_go(s) == SBJ_STATUS_OK); /* finished: no-op */
+    }
     CHECK(sbj_session_set_bank(s, 1) == SBJ_STATUS_OK);
     CHECK(sbj_session_set_bank(s, 2) == SBJ_STATUS_SHOW_ERROR);
     CHECK(sbj_session_learn_midi(s, "cue:3") == SBJ_STATUS_OK);

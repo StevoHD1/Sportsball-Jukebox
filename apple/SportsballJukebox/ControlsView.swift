@@ -31,6 +31,7 @@ struct ControlsView: View {
                     ControlRow(title: "Stop All", target: "stop_all", trigger: model.show.controls.stopAll)
                     ControlRow(title: "Next Bank", target: "next_bank", trigger: model.show.controls.nextBank)
                     ControlRow(title: "Previous Bank", target: "prev_bank", trigger: model.show.controls.prevBank)
+                    ControlRow(title: "Rundown GO", target: "rundown_go", trigger: model.show.controls.rundownGo)
                 }
                 .padding(6)
             }
@@ -93,6 +94,7 @@ struct ControlsView: View {
         /sbj/stop/<pad>   /sbj/fade/<pad>
         /sbj/stopall   /sbj/stopall/now
         /sbj/bank/<n>   /sbj/bank/next   /sbj/bank/prev
+        /sbj/go         /sbj/rundown/next   /sbj/rundown/prev
         """
     }
 

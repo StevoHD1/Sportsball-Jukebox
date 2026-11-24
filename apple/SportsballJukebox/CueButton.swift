@@ -120,6 +120,7 @@ struct CueButton: View {
     private var menu: some View {
         if let cue {
             Button("Edit Pad…") { model.editing = EditTarget(id: slot) }
+            Button("Add to Rundown") { model.addToRundown(pad: slot) }
             Button("Preview in Headphones (⌥-click)") { model.preview(slot) }
                 .disabled(!model.canPreview)
             if cue.playlist != nil {

@@ -29,6 +29,14 @@ struct SportsballJukeboxApp: App {
                 Button("Control (MIDI, OSC, Remote)…") { model.showingControls = true }
                     .keyboardShortcut("m", modifiers: [.command, .shift])
                 Button("Show Settings…") { model.showingSettings = true }
+                Button(model.showingRundown ? "Hide Rundown" : "Show Rundown") {
+                    model.showingRundown.toggle()
+                }
+                .keyboardShortcut("r", modifiers: [.command, .shift])
+                Button("Rundown: Next Step") { model.stepStandby(forward: true) }
+                    .keyboardShortcut(.rightArrow, modifiers: [.command])
+                Button("Rundown: Previous Step") { model.stepStandby(forward: false) }
+                    .keyboardShortcut(.leftArrow, modifiers: [.command])
                 Button(model.showingNowPlaying ? "Hide Now Playing" : "Show Now Playing") {
                     model.showingNowPlaying.toggle()
                 }

@@ -1,6 +1,6 @@
 # Sportsball Jukebox: Architecture
 
-Status: Phase 10 (level matching and silence trimming). Last updated 2026-11-24.
+Status: Phase 11 (game rundown). Last updated 2026-11-24.
 
 ## Goals, in priority order
 
@@ -417,12 +417,31 @@ silence at the top still fires instantly. The editor shows each file's
 loudness, peak and the gain applied, and a Trim Silence button for both
 ends.
 
+## Game rundown (Phase 11)
+
+The show's `rundown` is an ordered list of steps (`sbj-session/src/rundown.rs`):
+a pad to fire (`pad`, with an optional `text` label) or a note (`text`
+only, e.g. "Timeout 1"). The session keeps one pad step on **standby**
+(not saved; the first pad step when a show opens). **GO** fires the
+standby pad exactly as pressing it does (groups, ducking, retrigger, vamp
+release) and moves standby to the next pad step; notes are skipped. If
+the pad cannot fire (its device is gone), standby stays so GO can be
+retried. Back/next move standby without firing.
+
+GO comes from the app (button or Space), MIDI (learnable "Rundown GO"),
+OSC (`/sbj/go`, `/sbj/rundown/next|prev`) and the phone remote
+(`POST /api/go`, `/api/rundown/next|prev`, plus a `rundown` object in the
+state). Plays are logged with the source `rundown` (or the control
+surface's own source). Steps follow pads that move or are renumbered;
+the pre-game check warns about steps on empty pads.
+
 ## Play log (Phase 7)
 
 `sbj-session/src/log.rs` records each time a pad or playlist song starts:
 the time, game name, show, bank and pad, title, the audio file, the
 sponsor (a per-pad field), the output, and what triggered it (`operator`,
-`midi`, `osc`, `remote`, `marker`, or `auto` for playlist auto-advance). Entries close when
+`midi`, `osc`, `remote`, `marker`, `rundown`, or `auto` for playlist
+auto-advance). Entries close when
 the sound stops, finishes or is replaced, and the time played is
 measured on the wall clock. Closed entries are appended as JSON lines to
 `<log dir>/YYYY-MM-DD.jsonl` (UTC days) straight away, so a crash loses
@@ -568,6 +587,10 @@ CI.
 - Show-wide level matching to a target (with boost and peak limits),
   per-pad opt-out, playlists matched song by song.
 - Dropped files skip leading silence; Trim Silence in the editor.
+
+**Phase 11: Game rundown (built; awaiting Mac testing)**
+- Ordered list of pad steps and notes; standby, GO (Space), back/next.
+- GO from MIDI, OSC and the phone remote; steps follow moved pads.
 
 **Next candidates**
 - Signed releases once there is a Developer account.

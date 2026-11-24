@@ -100,6 +100,8 @@ pub enum LearnTarget {
     StopAll,
     NextBank,
     PrevBank,
+    /// GO on the rundown.
+    RundownGo,
 }
 
 impl<B: AudioBackend> Session<B> {
@@ -134,6 +136,7 @@ impl<B: AudioBackend> Session<B> {
             LearnTarget::StopAll => controls.stop_all = trigger,
             LearnTarget::NextBank => controls.next_bank = trigger,
             LearnTarget::PrevBank => controls.prev_bank = trigger,
+            LearnTarget::RundownGo => controls.rundown_go = trigger,
             LearnTarget::Cue(slot) => {
                 if let Some(cue) = self.show.cues.iter_mut().find(|c| c.slot == slot) {
                     cue.midi = trigger;
@@ -191,6 +194,9 @@ impl<B: AudioBackend> Session<B> {
             self.step_bank(false);
             return Some(format!("bank {}", self.current_bank + 1));
         }
+        if matches(&controls.rundown_go) {
+            return Some(self.control_go());
+        }
         let slots: Vec<u32> = self
             .show
             .cues
@@ -229,6 +235,15 @@ impl<B: AudioBackend> Session<B> {
         });
 
         let outcome = match parts.as_slice() {
+            ["sbj", "go"] => self.control_go(),
+            ["sbj", "rundown", "next"] => {
+                self.step_standby(true);
+                self.describe_standby()
+            }
+            ["sbj", "rundown", "prev" | "back"] => {
+                self.step_standby(false);
+                self.describe_standby()
+            }
             ["sbj", "fire"] => match first_int.and_then(|pad| self.osc_slot(None, pad)) {
                 Some(slot) => self.osc_fire(slot),
                 None => "needs a pad number".into(),
@@ -327,6 +342,7 @@ impl<B: AudioBackend> Session<B> {
             LearnTarget::StopAll => "Stop All".into(),
             LearnTarget::NextBank => "Next Bank".into(),
             LearnTarget::PrevBank => "Previous Bank".into(),
+            LearnTarget::RundownGo => "Rundown GO".into(),
             LearnTarget::Cue(slot) => match self.show.cue(slot) {
                 Some(c) if !c.title.is_empty() => format!("\"{}\"", c.title),
                 _ => {
@@ -334,6 +350,25 @@ impl<B: AudioBackend> Session<B> {
                     format!("bank {} pad {}", slot / slots + 1, slot % slots + 1)
                 }
             },
+        }
+    }
+}
+
+impl<B: AudioBackend> Session<B> {
+    /// Rundown GO from MIDI, OSC or the remote, described for the log.
+    fn control_go(&mut self) -> String {
+        let label = self.standby.and_then(|i| self.rundown_label(i));
+        match (self.rundown_go(), label) {
+            (Ok(Some(_)), Some(label)) => format!("GO \"{label}\""),
+            (Ok(_), _) => "GO: the rundown is finished".into(),
+            (Err(e), label) => format!("GO \"{}\" failed: {e}", label.unwrap_or_default()),
+        }
+    }
+
+    fn describe_standby(&self) -> String {
+        match self.standby.and_then(|i| self.rundown_label(i)) {
+            Some(label) => format!("standby \"{label}\""),
+            None => "the rundown is finished".into(),
         }
     }
 }

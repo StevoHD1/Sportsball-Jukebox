@@ -48,6 +48,22 @@ fn main() {
         cue.hotkey = Some(((b'1' + slot as u8) as char).to_string());
         session.set_cue(cue).unwrap();
     }
+    let step = |id, pad: Option<u32>, text: &str| sbj_session::RundownItem {
+        id,
+        pad,
+        text: text.into(),
+    };
+    session
+        .set_rundown(vec![
+            step(1, None, "Pregame"),
+            step(2, Some(8), ""),
+            step(3, Some(7), ""),
+            step(4, Some(3), "Crowd build into puck drop"),
+            step(5, None, "Period 1"),
+            step(6, Some(12), ""),
+        ])
+        .unwrap();
+    session.step_standby(true);
     session.fire_cue(6).unwrap();
     session.fire_cue(2).unwrap();
 

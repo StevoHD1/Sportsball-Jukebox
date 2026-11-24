@@ -219,6 +219,19 @@ built-in speakers or headphones)
 - [ ] Trim Silence on a file with silence at the end: the pad ends (and a
       loop wraps) without a gap.
 
+**Phase 11: game rundown**
+- [ ] Right-click a few pads → Add to Rundown. The Rundown panel opens
+      on the left (⇧⌘R toggles it). Add a note ("Timeout 1") with the
+      button at the top.
+- [ ] Drag steps to reorder; Delete removes the selected step.
+- [ ] Press Space: the standby step fires and the next one is on standby;
+      notes are skipped. ⌘→ / ⌘← move standby without firing; clicking a
+      step puts it on standby.
+- [ ] Control → learn "Rundown GO" to a controller button: it fires the
+      steps too. So does the GO bar on the phone remote.
+- [ ] Unplug the interface and press GO: an error appears and standby
+      stays on the same step.
+
 **Stress**
 - [ ] Leave a looping cue running for 10+ minutes. The status line should
       not start showing "glitches".

@@ -35,6 +35,7 @@ mod playback;
 mod playlist;
 mod preview;
 mod remote;
+mod rundown;
 pub use remote::RemoteError;
 
 pub use log::{LogEntry, LogTotal};
@@ -47,7 +48,7 @@ pub use preflight::{Check, CheckLevel, Preflight};
 pub use show::{
     ActionDoc, ActionKind, ClipDoc, ControlsDoc, CueDoc, CueProblem, CurveDoc, DEFAULT_FADE_OUT,
     DeviceRef, MAX_PADS_PER_BANK, MAX_SLOTS, MarkerDoc, MidiKind, MidiTrigger, OutputDoc,
-    PadTarget, PlaylistDoc, Retrigger, RouteDoc, Show, ShowError, TargetDoc,
+    PadTarget, PlaylistDoc, Retrigger, RouteDoc, RundownItem, Show, ShowError, TargetDoc,
 };
 
 /// How often to retry an output whose devices are all unavailable.
@@ -338,6 +339,8 @@ pub struct Session<B: AudioBackend> {
     /// Override for the engine's declick length (tests use 0).
     declick_seconds: Option<f64>,
     current_bank: u32,
+    /// Rundown step GO fires next.
+    standby: Option<usize>,
     learning: Option<LearnTarget>,
     last_control: Option<String>,
     /// Duck factor (linear) currently applied to each slot.
@@ -370,6 +373,7 @@ impl<B: AudioBackend> Session<B> {
             retry_interval: DEFAULT_RETRY_INTERVAL,
             declick_seconds: None,
             current_bank: 0,
+            standby: None,
             learning: None,
             last_control: None,
             duck_applied: HashMap::new(),
@@ -425,6 +429,7 @@ impl<B: AudioBackend> Session<B> {
         self.show = show;
         self.show_path = path;
         self.current_bank = 0;
+        self.standby = self.pad_step_from(0);
         self.learning = None;
         self.dirty = false;
         self.outputs = (0..self.show.outputs.len())
@@ -1016,6 +1021,9 @@ impl<B: AudioBackend> Session<B> {
     /// Rewrites the pads that Fire/StopPad markers act on; returns the
     /// slots of the cues whose markers changed.
     fn remap_pads(&mut self, map: impl Fn(u32) -> u32) -> Vec<u32> {
+        for item in &mut self.show.rundown {
+            item.pad = item.pad.map(&map);
+        }
         let mut changed = Vec::new();
         for cue in &mut self.show.cues {
             let mut touched = false;

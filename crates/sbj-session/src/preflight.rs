@@ -165,6 +165,7 @@ impl<B: AudioBackend> Session<B> {
             ("Stop All", controls.stop_all),
             ("Next Bank", controls.next_bank),
             ("Previous Bank", controls.prev_bank),
+            ("Rundown GO", controls.rundown_go),
         ] {
             if let Some(t) = trigger {
                 midi.entry(t).or_default().push(name.into());
@@ -181,6 +182,18 @@ impl<B: AudioBackend> Session<B> {
                     names.join(" and ")
                 ),
             );
+        }
+
+        // Rundown steps whose pad is empty.
+        for (i, item) in self.show.rundown.iter().enumerate() {
+            if let Some(pad) = item.pad
+                && self.show.cue(pad).is_none()
+            {
+                add(
+                    CheckLevel::Warning,
+                    format!("Rundown step {} fires an empty pad.", i + 1),
+                );
+            }
         }
 
         // Memory.

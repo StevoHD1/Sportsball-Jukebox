@@ -21,8 +21,8 @@ in **Show → Control…** (⇧⌘M).
 - **Assign a pad:** right-click it → **Learn MIDI Trigger**, then press a
   key, pad or button on the controller. The pad gets a 🎹 badge. Learning
   also works from the pad editor.
-- **Show-wide controls:** Stop All, Next Bank and Previous Bank can be
-  learned in the Control window.
+- **Show-wide controls:** Stop All, Next Bank, Previous Bank and Rundown
+  GO can be learned in the Control window.
 - **What triggers:** a note-on (velocity above 0), a control change with a
   value above 0 (a button press, not its release), or a program change.
   Triggers learned from a controller remember its MIDI channel.
@@ -49,6 +49,8 @@ Turn OSC on in **Show → Control…** and pick a UDP port (default
 | `/sbj/stopall` | Fade everything out (over the show's Stop All fade, 0.5 s by default) |
 | `/sbj/stopall/now` | Stop everything immediately |
 | `/sbj/bank/<n>`, `/sbj/bank/next`, `/sbj/bank/prev` | Change bank |
+| `/sbj/go` | Rundown GO: fire the standby step |
+| `/sbj/rundown/next`, `/sbj/rundown/prev` | Move the rundown's standby without firing |
 
 A message whose first argument is `0` is ignored. Controllers like
 TouchOSC send 1 when a button is pressed and 0 when it's released, and
@@ -109,6 +111,7 @@ API (for scripts and custom controllers; send header `X-SBJ-PIN: <pin>`):
 | `POST /api/stop/<slot>`, `/api/fade/<slot>`, `/api/next/<slot>` | Stop, fade out, next song |
 | `POST /api/stopall`, `/api/stopall/now` | Stop All (fade), or immediately |
 | `POST /api/bank/<n>`, `/api/bank/next`, `/api/bank/prev` | Change bank (from 1) |
+| `POST /api/go`, `/api/rundown/next`, `/api/rundown/prev` | Rundown GO, and moving standby |
 
 Every successful request returns the new state as JSON.
 

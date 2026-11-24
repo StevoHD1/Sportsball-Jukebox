@@ -29,7 +29,21 @@ cat > "$demo/Demo.sbjshow" <<JSON
     {"name": "Concourse", "device": {"id": "unknown", "name": "Null Audio Device"}}
   ],
   "controls": {"stop_all": {"kind": "note", "number": 0, "channel": 16},
-               "next_bank": {"kind": "cc", "number": 20}},
+               "next_bank": {"kind": "cc", "number": 20},
+               "rundown_go": {"kind": "cc", "number": 64}},
+  "rundown": [
+    {"id": 1, "text": "Doors open"},
+    {"id": 2, "pad": 6, "text": "Warm-up music"},
+    {"id": 3, "text": "Pregame"},
+    {"id": 4, "pad": 8},
+    {"id": 5, "pad": 7},
+    {"id": 6, "pad": 3, "text": "Crowd build into puck drop"},
+    {"id": 7, "text": "Period 1"},
+    {"id": 8, "pad": 24},
+    {"id": 9, "pad": 0, "text": "First goal: Charge!"},
+    {"id": 10, "text": "Intermission"},
+    {"id": 11, "pad": 9}
+  ],
   "cues": [
     {"slot": 0, "title": "Charge!", "hotkey": "1", "color": "red",
      "midi": {"kind": "note", "number": 36, "channel": 10},

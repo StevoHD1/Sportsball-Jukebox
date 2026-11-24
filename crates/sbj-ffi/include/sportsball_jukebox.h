@@ -104,7 +104,8 @@ SbjStatus sbj_session_device_info(const SbjSession *session, uint32_t index,
 char *sbj_session_show_json(const SbjSession *session);
 
 /* {"game", "preview_output": number|null, "preview": {"slot","playing","position"}|null,
- *  "bank", "learning": "cue:N|stop_all|next_bank|prev_bank"|null,
+ *  "bank", "standby": index|null,
+ *  "learning": "cue:N|stop_all|next_bank|prev_bank|rundown_go"|null,
  *  "last_control": string|null, "midi_inputs": [string]|null (null = MIDI off),
  *  "osc_port": number|null, "remote_port": number|null, "dirty", "path",
  *  "outputs": [{"name","status":"running|on_backup|offline",
@@ -123,6 +124,20 @@ SbjStatus sbj_session_save_show(const SbjSession *session, const char *path);
  *  absent = unchanged; changing it reloads, and so stops, every pad)}.
  * Cue slots are bank * slots + pad; resizing keeps each cue's bank/pad. */
 SbjStatus sbj_session_set_show_settings_json(const SbjSession *session, const char *json);
+/* ---- Rundown ------------------------------------------------------------ */
+
+/* JSON array of steps [{"id", "pad"?: slot, "text"?: string}]; a step
+ * without a pad is a note. Saved with the show ("rundown"). */
+SbjStatus sbj_session_set_rundown_json(const SbjSession *session, const char *json);
+/* Fire the standby step, then move standby to the next pad step.
+ * Status JSON "standby" is the step index, or null when finished. */
+SbjStatus sbj_session_rundown_go(const SbjSession *session);
+/* Put a step on standby (a note moves on to the next pad step);
+ * negative = finished. */
+SbjStatus sbj_session_set_standby(const SbjSession *session, int32_t index);
+/* Move standby to the next/previous pad step without firing. */
+SbjStatus sbj_session_step_standby(const SbjSession *session, bool forward);
+
 /* The visible bank (0-based): hotkeys and OSC pad numbers refer to it. */
 SbjStatus sbj_session_set_bank(const SbjSession *session, uint32_t bank);
 /* JSON array of outputs: [{"name", "device": {"id","name"}?, "backup": {...}?}] */
