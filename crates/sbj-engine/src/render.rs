@@ -81,6 +81,14 @@ impl GainRamp {
         }
     }
 
+    /// Jumps straight to `target` with no ramp (for when nothing is
+    /// audible, so there is no click to smooth).
+    fn jump(&mut self, target: f32) {
+        self.target = target;
+        self.current = target;
+        self.remaining = 0;
+    }
+
     #[inline]
     fn next(&mut self) -> f32 {
         if self.remaining > 0 {
@@ -538,7 +546,16 @@ impl Renderer {
                 Command::Stop(id) => self.players[id.0 as usize].stop(&mut outbox),
                 Command::Seek(id, pos) => self.players[id.0 as usize].seek(pos, &mut outbox),
                 Command::Restart(id) => self.players[id.0 as usize].restart(&mut outbox),
-                Command::SetPlayerGain(id, gain) => self.players[id.0 as usize].gain.set(gain),
+                Command::SetPlayerGain(id, gain) => {
+                    let player = &mut self.players[id.0 as usize];
+                    // Smooth changes only while audible; a stopped player
+                    // must start at its new gain, not ramp from the old one.
+                    if player.transport.playing {
+                        player.gain.set(gain);
+                    } else {
+                        player.gain.jump(gain);
+                    }
+                }
                 Command::FadeOutAndStop(id, length) => {
                     let player = &mut self.players[id.0 as usize];
                     if player.transport.playing {

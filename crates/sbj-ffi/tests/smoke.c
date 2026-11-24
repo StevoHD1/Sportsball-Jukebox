@@ -37,65 +37,86 @@ static int write_wav(const char *path) {
 
 int main(void) {
     printf("sportsball jukebox engine %s\n", sbj_version());
-    CHECK(sbj_abi_check(sizeof(SbjDeviceInfo), sizeof(SbjOutputInfo), sizeof(SbjCueState)));
+    CHECK(sbj_abi_check(sizeof(SbjDeviceInfo), sizeof(SbjCueState)));
 
-    /* Sounds */
-    const char *path = "sbj_smoke_test.wav";
-    CHECK(write_wav(path));
-    SbjStatus status = SBJ_STATUS_INTERNAL_ERROR;
-    SbjSound *sound = sbj_sound_load(path, 48000, &status);
-    remove(path);
-    CHECK(sound != NULL && status == SBJ_STATUS_OK);
-    CHECK(sbj_sound_duration_seconds(sound) > 0.099 && sbj_sound_duration_seconds(sound) < 0.101);
-    CHECK(sbj_sound_channels(sound) == 1);
-
-    CHECK(sbj_sound_load("does-not-exist.wav", 0, &status) == NULL);
-    CHECK(status == SBJ_STATUS_MEDIA_ERROR);
-    char msg[256];
-    CHECK(sbj_last_error_message(msg, sizeof msg) > 0);
-
-    /* Session */
-    SbjSession *session = sbj_session_create(16);
-    CHECK(session != NULL);
+    SbjSession *s = sbj_session_create();
+    CHECK(s != NULL);
     char backend[64];
-    CHECK(sbj_session_backend_name(session, backend, sizeof backend) == SBJ_STATUS_OK);
-    uint32_t devices = sbj_session_device_count(session);
+    CHECK(sbj_session_backend_name(s, backend, sizeof backend) == SBJ_STATUS_OK);
+    uint32_t devices = sbj_session_device_count(s);
     printf("backend %s, %u output device(s)\n", backend, devices);
     for (uint32_t i = 0; i < devices; i++) {
         SbjDeviceInfo info;
-        CHECK(sbj_session_device_info(session, i, &info) == SBJ_STATUS_OK);
+        CHECK(sbj_session_device_info(s, i, &info) == SBJ_STATUS_OK);
         printf("  %s%s (%u ch @ %u Hz)\n", info.name, info.is_default ? " [default]" : "",
                info.output_channels, info.sample_rate);
     }
+    CHECK(sbj_session_open_outputs(s) == SBJ_STATUS_OK);
+    CHECK(sbj_session_set_master_gain(s, 0.0f) == SBJ_STATUS_OK); /* stay quiet */
 
-    CHECK(sbj_session_set_cue_sound(session, 3, sound) == SBJ_STATUS_OK);
-    sbj_sound_free(sound); /* the session keeps its own reference */
-    CHECK(sbj_session_set_cue_loop(session, 3, true) == SBJ_STATUS_OK);
-    CHECK(sbj_session_set_cue_gain(session, 3, 0.8f) == SBJ_STATUS_OK);
+    /* Audio + cue */
+    const char *wav = "sbj_smoke_test.wav";
+    CHECK(write_wav(wav));
+    double duration = 0;
+    CHECK(sbj_session_load_sound(s, wav, &duration) == SBJ_STATUS_OK);
+    CHECK(duration > 0.099 && duration < 0.101);
+    float peaks[2 * 8];
+    CHECK(sbj_session_waveform(s, wav, 8, peaks) == SBJ_STATUS_OK);
+    CHECK(peaks[0] < -0.2f && peaks[1] > 0.2f);
 
-    SbjCueState cue;
-    CHECK(sbj_session_cue_state(session, 3, &cue) == SBJ_STATUS_OK);
-    CHECK(cue.assigned && cue.looping && !cue.playing && cue.gain == 0.8f);
+    char cue[512];
+    snprintf(cue, sizeof cue,
+             "{\"slot\":3,\"title\":\"Square\",\"hotkey\":\"q\",\"loop\":true,"
+             "\"clips\":[{\"file\":\"%s\"}],"
+             "\"markers\":[{\"id\":1,\"name\":\"half\",\"time\":0.05,"
+             "\"action\":{\"kind\":\"fade_out\",\"seconds\":0.02}}]}",
+             wav);
+    CHECK(sbj_session_set_cue_json(s, cue) == SBJ_STATUS_OK);
 
-    SbjOutputInfo out;
-    if (devices > 0 && sbj_session_open_output(session, NULL) == SBJ_STATUS_OK) {
-        CHECK(sbj_session_output_info(session, &out) == SBJ_STATUS_OK && out.is_open);
-        printf("opened %u ch @ %u Hz\n", out.channels, out.sample_rate);
-        CHECK(sbj_session_set_master_gain(session, 0.0f) == SBJ_STATUS_OK); /* stay quiet */
-        CHECK(sbj_session_fire_cue(session, 3) == SBJ_STATUS_OK);
-        CHECK(sbj_session_stop_all(session, 0.05) == SBJ_STATUS_OK);
-        CHECK(sbj_session_poll(session) == SBJ_STATUS_OK);
-        CHECK(sbj_session_close_output(session) == SBJ_STATUS_OK);
+    SbjCueState states[4];
+    CHECK(sbj_session_cue_states(s, 0, 4, states) == SBJ_STATUS_OK);
+    CHECK(states[3].assigned && states[3].looping && !states[3].playing);
+
+    if (states[3].ready) {
+        CHECK(sbj_session_fire_cue(s, 3) == SBJ_STATUS_OK);
+        CHECK(sbj_session_play_cue_from(s, 3, 0.02) == SBJ_STATUS_OK);
+        CHECK(sbj_session_stop_cue(s, 3, 0.01) == SBJ_STATUS_OK);
+        CHECK(sbj_session_stop_all(s, 0.05) == SBJ_STATUS_OK);
+        printf("played through a real device\n");
     } else {
         printf("no usable output device; skipping playback\n");
-        CHECK(sbj_session_fire_cue(session, 3) == SBJ_STATUS_NO_OUTPUT);
+        CHECK(sbj_session_fire_cue(s, 3) == SBJ_STATUS_NO_OUTPUT);
     }
-    CHECK(sbj_session_output_info(session, &out) == SBJ_STATUS_OK && !out.is_open);
-    CHECK(sbj_session_fire_cue(session, 999) == SBJ_STATUS_INVALID_ARGUMENT);
-    CHECK(sbj_session_fire_cue(NULL, 0) == SBJ_STATUS_NULL_POINTER);
-    CHECK(sbj_session_clear_cue(session, 3) == SBJ_STATUS_OK);
+    CHECK(sbj_session_poll(s) == SBJ_STATUS_OK);
 
-    sbj_session_destroy(session);
+    /* Show documents */
+    char *json = sbj_session_show_json(s);
+    CHECK(json != NULL && strstr(json, "\"Square\"") != NULL);
+    sbj_string_free(json);
+    char *status = sbj_session_status_json(s);
+    CHECK(status != NULL && strstr(status, "\"dirty\":true") != NULL);
+    printf("status: %s\n", status);
+    sbj_string_free(status);
+
+    const char *show_path = "sbj_smoke_test.sbjshow";
+    CHECK(sbj_session_set_show_settings(s, "Smoke", 24, 6) == SBJ_STATUS_OK);
+    CHECK(sbj_session_save_show(s, show_path) == SBJ_STATUS_OK);
+    CHECK(sbj_session_new_show(s) == SBJ_STATUS_OK);
+    CHECK(sbj_session_cue_states(s, 3, 1, states) == SBJ_STATUS_OK && !states[0].assigned);
+    CHECK(sbj_session_open_show(s, show_path) == SBJ_STATUS_OK);
+    CHECK(sbj_session_cue_states(s, 3, 1, states) == SBJ_STATUS_OK && states[0].assigned);
+    CHECK(sbj_session_move_cue(s, 3, 4) == SBJ_STATUS_OK);
+    CHECK(sbj_session_remove_cue(s, 4) == SBJ_STATUS_OK);
+    CHECK(sbj_session_set_outputs_json(s, "[{\"name\":\"Main\"},{\"name\":\"Lobby\"}]") ==
+          SBJ_STATUS_OK);
+    remove(show_path);
+    remove(wav);
+
+    CHECK(sbj_session_open_show(s, "missing.sbjshow") == SBJ_STATUS_SHOW_ERROR);
+    CHECK(sbj_session_fire_cue(s, 999) == SBJ_STATUS_INVALID_ARGUMENT);
+    CHECK(sbj_session_fire_cue(NULL, 0) == SBJ_STATUS_NULL_POINTER);
+
+    sbj_session_destroy(s);
     printf("ok\n");
     return 0;
 }

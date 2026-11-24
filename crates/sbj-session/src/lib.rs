@@ -1,44 +1,63 @@
-//! The app model: a bank of cue slots playing through one output device.
+//! The app model: a show (pads, timelines, markers, outputs) playing
+//! through one or more audio devices.
 //!
-//! This is what the UI drives (through `sbj-ffi`). It owns the audio
-//! backend, the open output stream, and the engine controller, and maps
-//! cues to engine players one-to-one.
+//! * Each logical output in the show gets its own engine and device
+//!   stream, so interfaces run independently on their own clocks.
+//! * Each pad slot maps to the engine player with the same index, on
+//!   whichever output the cue is routed to.
+//! * If an output's device fails, [`Session::poll`] reopens it on the
+//!   backup device (or the system default) and resumes what was playing.
 //!
-//! Phase 1 scope: one output device at a time. Several devices at once
-//! (one engine each) comes in Phase 2.
+//! This is what the UI drives (through `sbj-ffi`). Slow work (decoding
+//! files) can be done without holding the session, via [`decode_files`]
+//! and [`Session::add_sound`].
 
+pub mod show;
+
+use std::collections::HashMap;
 use std::fmt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use sbj_backend::{
-    AudioBackend, BackendError, DeviceId, DeviceInfo, OutputStream, StreamConfig, StreamHealth,
+    AudioBackend, BackendError, DeviceInfo, OutputStream, StreamConfig, StreamHealth,
 };
 use sbj_engine::{
-    AudioBuffer, Clip, Controller, Engine, EngineConfig, EngineError, LoopCount, Marker,
-    MarkerAction, PlayerId, Timeline, TimelineError, samples_to_seconds, seconds_to_samples,
+    AudioBuffer, Controller, Engine, EngineConfig, EngineError, PlayerId, samples_to_seconds,
+    seconds_to_samples,
 };
 use sbj_media::MediaError;
+
+pub use show::{
+    ActionDoc, ActionKind, ClipDoc, CueDoc, CueProblem, CurveDoc, DeviceRef, MAX_SLOTS, MarkerDoc,
+    OutputDoc, Show, ShowError, TargetDoc,
+};
+
+/// How often to retry an output whose devices are all unavailable.
+pub const DEFAULT_RETRY_INTERVAL: Duration = Duration::from_secs(2);
 
 #[derive(Debug)]
 pub enum SessionError {
     InvalidCue(u32),
+    InvalidOutput(u32),
     NoOutput,
     Backend(BackendError),
     Engine(EngineError),
     Media(MediaError),
-    Timeline(TimelineError),
+    Show(ShowError),
 }
 
 impl fmt::Display for SessionError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::InvalidCue(i) => write!(f, "cue {i} does not exist"),
-            Self::NoOutput => write!(f, "no audio output is open"),
+            Self::InvalidCue(i) => write!(f, "pad {} does not exist", i + 1),
+            Self::InvalidOutput(i) => write!(f, "output {} does not exist", i + 1),
+            Self::NoOutput => write!(f, "the cue's audio output is not available"),
             Self::Backend(e) => e.fmt(f),
             Self::Engine(e) => e.fmt(f),
             Self::Media(e) => e.fmt(f),
-            Self::Timeline(e) => e.fmt(f),
+            Self::Show(e) => e.fmt(f),
         }
     }
 }
@@ -60,40 +79,41 @@ impl From<MediaError> for SessionError {
         Self::Media(e)
     }
 }
-impl From<TimelineError> for SessionError {
-    fn from(e: TimelineError) -> Self {
-        Self::Timeline(e)
+impl From<ShowError> for SessionError {
+    fn from(e: ShowError) -> Self {
+        Self::Show(e)
     }
 }
 
 pub type Result<T> = std::result::Result<T, SessionError>;
 
-/// A decoded sound, ready to assign to cues. Decoding is slow, so do it on
-/// a background thread; passing the output's sample rate as
-/// `target_rate` also does the resampling there, off the session lock.
+// ---------------------------------------------------------------------
+// Sounds
+// ---------------------------------------------------------------------
+
+/// A decoded audio file, with copies converted to output sample rates.
 #[derive(Debug, Clone)]
 pub struct Sound {
     original: Arc<AudioBuffer>,
-    converted: Option<Arc<AudioBuffer>>,
+    by_rate: HashMap<u32, Arc<AudioBuffer>>,
 }
 
 impl Sound {
-    pub fn load(path: impl AsRef<Path>, target_rate: Option<u32>) -> Result<Self> {
-        Self::from_buffer(sbj_media::decode_file(path)?, target_rate)
+    /// Decodes `path` and pre-converts it to each of `rates`. Slow: call
+    /// off the main thread.
+    pub fn load(path: impl AsRef<Path>, rates: &[u32]) -> Result<Self> {
+        Self::from_buffer(sbj_media::decode_file(path)?, rates)
     }
 
-    pub fn from_buffer(buffer: AudioBuffer, target_rate: Option<u32>) -> Result<Self> {
-        let original = Arc::new(buffer);
-        let converted = match target_rate {
-            Some(rate) if rate != original.sample_rate() => {
-                Some(Arc::new(sbj_media::resample(&original, rate)?))
-            }
-            _ => None,
+    pub fn from_buffer(buffer: AudioBuffer, rates: &[u32]) -> Result<Self> {
+        let mut sound = Self {
+            original: Arc::new(buffer),
+            by_rate: HashMap::new(),
         };
-        Ok(Self {
-            original,
-            converted,
-        })
+        for &rate in rates {
+            sound.at_rate(rate)?;
+        }
+        Ok(sound)
     }
 
     pub fn duration_seconds(&self) -> f64 {
@@ -104,88 +124,202 @@ impl Sound {
         self.original.channels()
     }
 
-    pub fn sample_rate(&self) -> u32 {
-        self.original.sample_rate()
+    pub fn original(&self) -> &Arc<AudioBuffer> {
+        &self.original
     }
 
-    /// The audio at `rate`, resampling (slow) only if not already prepared.
-    fn at_rate(&self, rate: u32) -> Result<Arc<AudioBuffer>> {
+    /// The audio at `rate`, converting (slow) the first time.
+    fn at_rate(&mut self, rate: u32) -> Result<Arc<AudioBuffer>> {
         if self.original.sample_rate() == rate {
             return Ok(Arc::clone(&self.original));
         }
-        match &self.converted {
-            Some(c) if c.sample_rate() == rate => Ok(Arc::clone(c)),
-            _ => Ok(Arc::new(sbj_media::resample(&self.original, rate)?)),
+        if let Some(b) = self.by_rate.get(&rate) {
+            return Ok(Arc::clone(b));
         }
+        let converted = Arc::new(sbj_media::resample(&self.original, rate)?);
+        self.by_rate.insert(rate, Arc::clone(&converted));
+        Ok(converted)
     }
 }
 
-#[derive(Debug, Clone, Default)]
-struct Cue {
-    sound: Option<Sound>,
-    /// The sound at the current output rate, cached.
-    prepared: Option<Arc<AudioBuffer>>,
-    /// Loop setting of the timeline loaded in the engine, if any.
-    loaded_looping: Option<bool>,
-    looping: bool,
-    gain: f32,
+/// Result of decoding a batch of files.
+#[derive(Debug, Default)]
+pub struct DecodeReport {
+    /// Keyed by the file string as written in the show.
+    pub sounds: Vec<(String, Sound)>,
+    /// File and reason.
+    pub failures: Vec<(String, String)>,
 }
 
-/// Snapshot of a cue for display.
+/// Decodes files in parallel, without touching any session. `show_dir`
+/// lets moved shows find their audio (see [`show::resolve_file`]).
+pub fn decode_files(files: &[String], show_dir: Option<&Path>, rates: &[u32]) -> DecodeReport {
+    let workers = std::thread::available_parallelism()
+        .map_or(4, |n| n.get())
+        .clamp(1, 8);
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let results = std::sync::Mutex::new(DecodeReport::default());
+
+    std::thread::scope(|scope| {
+        for _ in 0..workers.min(files.len()) {
+            scope.spawn(|| {
+                loop {
+                    let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let Some(file) = files.get(i) else { break };
+                    let outcome = match show::resolve_file(file, show_dir) {
+                        None => Err("file not found".to_string()),
+                        Some(path) => Sound::load(&path, rates).map_err(|e| e.to_string()),
+                    };
+                    let mut report = results.lock().unwrap_or_else(|e| e.into_inner());
+                    match outcome {
+                        Ok(sound) => report.sounds.push((file.clone(), sound)),
+                        Err(why) => report.failures.push((file.clone(), why)),
+                    }
+                }
+            });
+        }
+    });
+    results.into_inner().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Min/max peaks of `buffer` (all channels mixed) in `buckets` equal
+/// slices, for drawing waveforms.
+pub fn waveform(buffer: &AudioBuffer, buckets: usize) -> Vec<(f32, f32)> {
+    let frames = buffer.frames() as usize;
+    let ch = usize::from(buffer.channels());
+    if buckets == 0 || frames == 0 {
+        return Vec::new();
+    }
+    let data = buffer.data();
+    (0..buckets)
+        .map(|b| {
+            let from = b * frames / buckets;
+            let to = ((b + 1) * frames / buckets).max(from + 1).min(frames);
+            let mut lo = 0.0f32;
+            let mut hi = 0.0f32;
+            for frame in data[from * ch..to * ch].chunks_exact(ch) {
+                for &s in frame {
+                    lo = lo.min(s);
+                    hi = hi.max(s);
+                }
+            }
+            (lo, hi)
+        })
+        .collect()
+}
+
+// ---------------------------------------------------------------------
+// State snapshots for the UI
+// ---------------------------------------------------------------------
+
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct CueState {
     pub assigned: bool,
     pub playing: bool,
     pub looping: bool,
-    pub gain: f32,
+    /// The cue's output is open and the cue is loaded on it.
+    pub ready: bool,
     pub position_seconds: f64,
     pub duration_seconds: f64,
 }
 
-/// Snapshot of the output for display.
-#[derive(Debug, Clone, PartialEq)]
-pub struct OutputState {
-    pub device: DeviceId,
-    pub sample_rate: u32,
-    pub channels: u16,
-    pub health: StreamHealth,
-    /// Device-reported buffer underruns (audible glitches) since opening.
-    pub xruns: u64,
-    /// Engine events dropped because nobody polled. Should be 0.
-    pub dropped_events: u64,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OutputStatus {
+    /// Playing through its preferred device (or the system default).
+    Running,
+    /// Playing through its backup because the preferred device is missing
+    /// or failed.
+    OnBackup,
+    /// No device available; retrying.
+    Offline,
 }
 
-struct Output<S> {
-    device: DeviceId,
+#[derive(Debug, Clone, PartialEq)]
+pub struct OutputState {
+    pub name: String,
+    pub status: OutputStatus,
+    pub device_id: Option<String>,
+    pub device_name: Option<String>,
+    pub sample_rate: u32,
+    pub channels: u16,
+    /// Device-reported glitches since this device was opened.
+    pub xruns: u64,
+    pub error: Option<String>,
+}
+
+// ---------------------------------------------------------------------
+// Session
+// ---------------------------------------------------------------------
+
+struct Live<S> {
+    device: DeviceInfo,
     config: StreamConfig,
     controller: Controller,
     stream: S,
 }
 
+struct OutputRuntime<S> {
+    live: Option<Live<S>>,
+    on_backup: bool,
+    error: Option<String>,
+    retry_at: Option<Instant>,
+}
+
+impl<S> Default for OutputRuntime<S> {
+    fn default() -> Self {
+        Self {
+            live: None,
+            on_backup: false,
+            error: None,
+            retry_at: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct LoadedCue {
+    output: usize,
+    length_seconds: f64,
+}
+
 pub struct Session<B: AudioBackend> {
     backend: B,
-    cues: Vec<Cue>,
-    output: Option<Output<B::Stream>>,
+    show: Show,
+    show_path: Option<PathBuf>,
+    dirty: bool,
+    library: HashMap<String, Sound>,
+    file_errors: HashMap<String, String>,
+    outputs: Vec<OutputRuntime<B::Stream>>,
+    loaded: HashMap<u32, LoadedCue>,
+    problems: Vec<CueProblem>,
+    notices: Vec<String>,
     master_gain: f32,
+    retry_interval: Duration,
 }
 
 impl<B: AudioBackend> Session<B> {
-    pub fn new(backend: B, cue_count: u32) -> Self {
+    /// A session with an empty default show. No device is opened until
+    /// [`Session::open_outputs`].
+    pub fn new(backend: B) -> Self {
         Self {
             backend,
-            cues: (0..cue_count)
-                .map(|_| Cue {
-                    gain: 1.0,
-                    ..Cue::default()
-                })
-                .collect(),
-            output: None,
+            show: Show::default(),
+            show_path: None,
+            dirty: false,
+            library: HashMap::new(),
+            file_errors: HashMap::new(),
+            outputs: vec![OutputRuntime::default()],
+            loaded: HashMap::new(),
+            problems: Vec::new(),
+            notices: Vec::new(),
             master_gain: 1.0,
+            retry_interval: DEFAULT_RETRY_INTERVAL,
         }
     }
 
-    pub fn cue_count(&self) -> u32 {
-        self.cues.len() as u32
+    /// How often to retry an output whose devices are all unavailable.
+    pub fn set_retry_interval(&mut self, interval: Duration) {
+        self.retry_interval = interval;
     }
 
     pub fn backend(&self) -> &B {
@@ -196,201 +330,513 @@ impl<B: AudioBackend> Session<B> {
         Ok(self.backend.output_devices()?)
     }
 
-    /// Opens `device` (or the system default) as the output, replacing any
-    /// open output. Every assigned cue is converted to the device's rate,
-    /// which can take a moment with many long sounds.
-    pub fn open_output(&mut self, device: Option<&DeviceId>) -> Result<()> {
-        self.close_output();
-        let device = match device {
-            Some(d) => d.clone(),
-            None => self.backend.default_output_device()?,
-        };
-        let config = self.backend.preferred_config(&device)?;
+    // ---- Show document ------------------------------------------------
 
-        let mut engine_config = EngineConfig::new(config.sample_rate, config.channels);
-        engine_config.players = self.cue_count().max(1);
-        let (mut controller, mut renderer) = Engine::create(engine_config)?;
-        controller.set_master_gain(self.master_gain)?;
+    pub fn show(&self) -> &Show {
+        &self.show
+    }
 
-        for (i, cue) in self.cues.iter_mut().enumerate() {
-            cue.prepared = None;
-            cue.loaded_looping = None;
-            if let Some(sound) = &cue.sound {
-                let buffer = sound.at_rate(config.sample_rate)?;
-                controller.load(PlayerId(i as u32), cue_timeline(&buffer, cue.looping)?)?;
-                controller.set_player_gain(PlayerId(i as u32), cue.gain)?;
-                cue.prepared = Some(buffer);
-                cue.loaded_looping = Some(cue.looping);
+    pub fn show_path(&self) -> Option<&Path> {
+        self.show_path.as_deref()
+    }
+
+    /// Unsaved changes since the last load or save.
+    pub fn is_dirty(&self) -> bool {
+        self.dirty
+    }
+
+    /// Replaces the show. Everything stops. `sounds` should hold the
+    /// decoded audio for the show's files (see [`decode_files`]); any
+    /// missing files are reported as cue problems.
+    pub fn install_show(&mut self, show: Show, path: Option<PathBuf>, decoded: DecodeReport) {
+        self.close_outputs();
+        self.library.clear();
+        self.file_errors.clear();
+        self.add_decoded(decoded);
+        self.show = show;
+        self.show_path = path;
+        self.dirty = false;
+        self.outputs = (0..self.show.outputs.len())
+            .map(|_| OutputRuntime::default())
+            .collect();
+        self.open_outputs();
+    }
+
+    pub fn new_show(&mut self) {
+        self.install_show(Show::default(), None, DecodeReport::default());
+    }
+
+    pub fn save_show(&mut self, path: &Path) -> Result<()> {
+        self.show.save(path)?;
+        self.show_path = Some(path.to_path_buf());
+        self.dirty = false;
+        Ok(())
+    }
+
+    fn show_dir(&self) -> Option<PathBuf> {
+        self.show_path
+            .as_deref()
+            .and_then(Path::parent)
+            .map(Path::to_path_buf)
+    }
+
+    /// Renames the show and sets the grid size. Shrinking the grid is
+    /// refused while cues occupy the removed pads.
+    pub fn set_show_settings(&mut self, name: &str, slots: u32, columns: u32) -> Result<()> {
+        if slots == 0 || slots > MAX_SLOTS {
+            return Err(SessionError::Show(ShowError::Invalid(format!(
+                "pad count must be 1-{MAX_SLOTS}"
+            ))));
+        }
+        if let Some(cue) = self.show.cues.iter().find(|c| c.slot >= slots) {
+            return Err(SessionError::Show(ShowError::Invalid(format!(
+                "pad {} (\"{}\") is still in use",
+                cue.slot + 1,
+                cue.title
+            ))));
+        }
+        self.show.name = name.to_string();
+        self.show.slots = slots;
+        self.show.columns = columns.clamp(1, 16);
+        self.dirty = true;
+        Ok(())
+    }
+
+    // ---- Sounds -------------------------------------------------------
+
+    /// Sample rates of the open outputs; decode with these to keep
+    /// resampling off the session.
+    pub fn output_rates(&self) -> Vec<u32> {
+        let mut rates: Vec<u32> = self
+            .outputs
+            .iter()
+            .filter_map(|o| o.live.as_ref().map(|l| l.config.sample_rate))
+            .collect();
+        rates.sort_unstable();
+        rates.dedup();
+        rates
+    }
+
+    pub fn add_sound(&mut self, file: String, sound: Sound) {
+        self.file_errors.remove(&file);
+        self.library.insert(file, sound);
+    }
+
+    fn add_decoded(&mut self, decoded: DecodeReport) {
+        for (file, sound) in decoded.sounds {
+            self.add_sound(file, sound);
+        }
+        for (file, why) in decoded.failures {
+            self.file_errors.insert(file, why);
+        }
+    }
+
+    pub fn has_sound(&self, file: &str) -> bool {
+        self.library.contains_key(file)
+    }
+
+    /// The decoded audio for `file`, at its original rate.
+    pub fn sound_buffer(&self, file: &str) -> Option<Arc<AudioBuffer>> {
+        self.library.get(file).map(|s| Arc::clone(s.original()))
+    }
+
+    // ---- Outputs ------------------------------------------------------
+
+    /// Opens every output's device and loads its cues.
+    pub fn open_outputs(&mut self) {
+        for index in 0..self.outputs.len() {
+            self.open_output(index);
+        }
+    }
+
+    pub fn close_outputs(&mut self) {
+        for output in &mut self.outputs {
+            *output = OutputRuntime::default();
+        }
+        self.loaded.clear();
+    }
+
+    /// Replaces the output list. Outputs whose settings changed are
+    /// reopened; cues routed to removed outputs move to the first.
+    pub fn set_outputs(&mut self, outputs: Vec<OutputDoc>) -> Result<()> {
+        if outputs.is_empty() {
+            return Err(SessionError::Show(ShowError::Invalid(
+                "a show needs at least one output".into(),
+            )));
+        }
+        let old = std::mem::replace(&mut self.show.outputs, outputs);
+        let count = self.show.outputs.len();
+        for cue in &mut self.show.cues {
+            if cue.output as usize >= count {
+                cue.output = 0;
             }
         }
+        self.outputs.truncate(count);
+        self.outputs.resize_with(count, OutputRuntime::default);
+        self.loaded.retain(|_, l| l.output < count);
+        for index in 0..count {
+            let changed = old.get(index) != Some(&self.show.outputs[index]);
+            if changed || self.outputs[index].live.is_none() {
+                self.open_output(index);
+            }
+        }
+        // Cues moved off removed outputs need loading on their new one.
+        let slots: Vec<u32> = self.show.cues.iter().map(|c| c.slot).collect();
+        for slot in slots {
+            if !self.loaded.contains_key(&slot) {
+                self.load_cue(slot);
+            }
+        }
+        self.dirty = true;
+        Ok(())
+    }
 
+    /// Devices to try for an output, in order, with whether each counts
+    /// as the backup.
+    fn candidates(&self, doc: &OutputDoc) -> Vec<(DeviceInfo, bool)> {
+        let devices = self.backend.output_devices().unwrap_or_default();
+        let find = |r: &DeviceRef| {
+            devices
+                .iter()
+                .find(|d| d.id.0 == r.id)
+                .or_else(|| {
+                    devices
+                        .iter()
+                        .find(|d| !r.name.is_empty() && d.name == r.name)
+                })
+                .cloned()
+        };
+        let default = devices.iter().find(|d| d.is_default).cloned();
+        let mut list = Vec::new();
+        match &doc.device {
+            Some(r) => {
+                if let Some(d) = find(r) {
+                    list.push((d, false));
+                }
+            }
+            None => {
+                if let Some(d) = default.clone() {
+                    list.push((d, false));
+                }
+            }
+        }
+        if let Some(d) = doc.backup.as_ref().and_then(find) {
+            list.push((d, true));
+        }
+        if doc.device.is_some()
+            && let Some(d) = default
+        {
+            list.push((d, true));
+        }
+        let mut seen = std::collections::HashSet::new();
+        list.retain(|(d, _)| seen.insert(d.id.clone()));
+        list
+    }
+
+    fn start_stream(&self, device: &DeviceInfo) -> Result<Live<B::Stream>> {
+        let config = self.backend.preferred_config(&device.id)?;
+        let mut engine = EngineConfig::new(config.sample_rate, config.channels);
+        engine.players = MAX_SLOTS;
+        let (mut controller, mut renderer) = Engine::create(engine)?;
+        controller.set_master_gain(self.master_gain)?;
         let stream = self.backend.open_output(
-            &device,
+            &device.id,
             config,
             Box::new(move |out| renderer.process(out)),
         )?;
-        self.output = Some(Output {
-            device,
+        Ok(Live {
+            device: device.clone(),
             config,
             controller,
             stream,
-        });
-        Ok(())
-    }
-
-    pub fn close_output(&mut self) {
-        self.output = None;
-        for cue in &mut self.cues {
-            cue.prepared = None;
-            cue.loaded_looping = None;
-        }
-    }
-
-    pub fn output_state(&self) -> Option<OutputState> {
-        self.output.as_ref().map(|o| OutputState {
-            device: o.device.clone(),
-            sample_rate: o.config.sample_rate,
-            channels: o.config.channels,
-            health: o.stream.status().health(),
-            xruns: o.stream.status().xruns(),
-            dropped_events: o.controller.dropped_events(),
         })
     }
 
-    /// The open stream, e.g. to pull audio from an offline backend in tests.
-    pub fn output_stream_mut(&mut self) -> Option<&mut B::Stream> {
-        self.output.as_mut().map(|o| &mut o.stream)
+    /// (Re)opens one output on the best available device and loads its
+    /// cues. Returns whether a device was opened.
+    fn open_output(&mut self, index: usize) -> bool {
+        self.outputs[index] = OutputRuntime::default();
+        self.loaded.retain(|_, l| l.output != index);
+
+        let doc = self.show.outputs[index].clone();
+        let mut last_error = None;
+        for (device, is_backup) in self.candidates(&doc) {
+            match self.start_stream(&device) {
+                Ok(live) => {
+                    let output = &mut self.outputs[index];
+                    output.live = Some(live);
+                    output.on_backup = is_backup;
+                    if is_backup {
+                        self.notices.push(format!(
+                            "Output \"{}\" is using backup device \"{}\".",
+                            doc.name, device.name
+                        ));
+                    }
+                    let slots: Vec<u32> = self
+                        .show
+                        .cues
+                        .iter()
+                        .filter(|c| self.output_index(c) == index)
+                        .map(|c| c.slot)
+                        .collect();
+                    for slot in slots {
+                        self.load_cue(slot);
+                    }
+                    return true;
+                }
+                Err(e) => last_error = Some(format!("{}: {e}", device.name)),
+            }
+        }
+        let output = &mut self.outputs[index];
+        output.error = Some(last_error.unwrap_or_else(|| "no audio device available".into()));
+        output.retry_at = Some(Instant::now() + self.retry_interval);
+        false
     }
 
-    fn cue_mut(&mut self, cue: u32) -> Result<&mut Cue> {
-        self.cues
-            .get_mut(cue as usize)
-            .ok_or(SessionError::InvalidCue(cue))
+    fn output_index(&self, cue: &CueDoc) -> usize {
+        (cue.output as usize).min(self.outputs.len() - 1)
     }
 
-    fn controller(&mut self) -> Result<&mut Controller> {
-        self.output
-            .as_mut()
-            .map(|o| &mut o.controller)
-            .ok_or(SessionError::NoOutput)
+    pub fn outputs_state(&self) -> Vec<OutputState> {
+        self.show
+            .outputs
+            .iter()
+            .zip(&self.outputs)
+            .map(|(doc, rt)| match &rt.live {
+                Some(live) => OutputState {
+                    name: doc.name.clone(),
+                    status: if rt.on_backup {
+                        OutputStatus::OnBackup
+                    } else {
+                        OutputStatus::Running
+                    },
+                    device_id: Some(live.device.id.0.clone()),
+                    device_name: Some(live.device.name.clone()),
+                    sample_rate: live.config.sample_rate,
+                    channels: live.config.channels,
+                    xruns: live.stream.status().xruns(),
+                    error: None,
+                },
+                None => OutputState {
+                    name: doc.name.clone(),
+                    status: OutputStatus::Offline,
+                    device_id: None,
+                    device_name: None,
+                    sample_rate: 0,
+                    channels: 0,
+                    xruns: 0,
+                    error: rt.error.clone(),
+                },
+            })
+            .collect()
     }
 
-    /// Loads the cue's current sound and loop setting into its player.
-    fn reload(&mut self, cue: u32) -> Result<()> {
-        let Some(output) = self.output.as_mut() else {
-            return Ok(());
+    /// The live stream of output `index`, e.g. to pull audio from an
+    /// offline backend in tests.
+    pub fn output_stream_mut(&mut self, index: usize) -> Option<&mut B::Stream> {
+        self.outputs
+            .get_mut(index)
+            .and_then(|o| o.live.as_mut())
+            .map(|l| &mut l.stream)
+    }
+
+    // ---- Cues ---------------------------------------------------------
+
+    /// Builds and loads a cue onto its output, replacing what the slot
+    /// held. Problems (missing files etc.) are recorded, not returned.
+    fn load_cue(&mut self, slot: u32) {
+        self.problems.retain(|p| p.slot != slot);
+        if let Some(previous) = self.loaded.remove(&slot)
+            && let Some(live) = self.outputs[previous.output].live.as_mut()
+        {
+            let _ = live.controller.unload(PlayerId(slot));
+        }
+        let Some(cue) = self.show.cue(slot).cloned() else {
+            return;
         };
-        let rate = output.config.sample_rate;
-        let c = self
-            .cues
-            .get_mut(cue as usize)
-            .ok_or(SessionError::InvalidCue(cue))?;
-        let player = PlayerId(cue);
-        match &c.sound {
+        let index = self.output_index(&cue);
+        if cue.output as usize != index {
+            self.problems.push(CueProblem {
+                slot,
+                message: format!("output {} does not exist; using the first", cue.output + 1),
+            });
+        }
+        let Some(live) = self.outputs[index].live.as_mut() else {
+            return;
+        };
+        let rate = live.config.sample_rate;
+
+        let mut audio = HashMap::new();
+        for clip in &cue.clips {
+            if let Some(sound) = self.library.get_mut(&clip.file) {
+                match sound.at_rate(rate) {
+                    Ok(buffer) => {
+                        audio.insert(clip.file.clone(), buffer);
+                    }
+                    Err(e) => self.problems.push(CueProblem {
+                        slot,
+                        message: e.to_string(),
+                    }),
+                }
+            }
+        }
+        let (timeline, problems) = show::cue_timeline(&cue, rate, &audio);
+        for mut problem in problems {
+            // Say why a file is missing when we know.
+            if let Some(file) = problem.message.strip_prefix(show::MISSING_FILE)
+                && let Some(why) = self.file_errors.get(file)
+            {
+                problem.message = format!("{file}: {why}");
+            }
+            self.problems.push(problem);
+        }
+        let length_seconds = samples_to_seconds(timeline.length(), rate);
+        let player = PlayerId(slot);
+        let loaded = live
+            .controller
+            .load(player, timeline)
+            .and_then(|()| live.controller.set_player_gain(player, cue.gain));
+        match loaded {
+            Ok(()) => {
+                self.loaded.insert(
+                    slot,
+                    LoadedCue {
+                        output: index,
+                        length_seconds,
+                    },
+                );
+            }
+            Err(e) => self.problems.push(CueProblem {
+                slot,
+                message: e.to_string(),
+            }),
+        }
+    }
+
+    /// Adds or replaces the cue in `cue.slot` and loads it. Any audio it
+    /// uses that is not yet decoded is decoded now (slow); to avoid that,
+    /// decode first with [`decode_files`] and [`Session::add_sound`].
+    pub fn set_cue(&mut self, cue: CueDoc) -> Result<()> {
+        if cue.slot >= self.show.slots {
+            return Err(SessionError::InvalidCue(cue.slot));
+        }
+        if cue.output as usize >= self.show.outputs.len() {
+            return Err(SessionError::InvalidOutput(cue.output));
+        }
+        let missing: Vec<String> = cue
+            .clips
+            .iter()
+            .map(|c| c.file.clone())
+            .filter(|f| !self.library.contains_key(f))
+            .collect();
+        if !missing.is_empty() {
+            let dir = self.show_dir();
+            let rates = self.output_rates();
+            self.add_decoded(decode_files(&missing, dir.as_deref(), &rates));
+        }
+        let slot = cue.slot;
+        match self.show.cues.iter_mut().find(|c| c.slot == slot) {
+            Some(existing) => *existing = cue,
             None => {
-                c.prepared = None;
-                c.loaded_looping = None;
-                output.controller.unload(player)?;
-            }
-            Some(sound) => {
-                let buffer = match &c.prepared {
-                    Some(b) if b.sample_rate() == rate => Arc::clone(b),
-                    _ => sound.at_rate(rate)?,
-                };
-                output
-                    .controller
-                    .load(player, cue_timeline(&buffer, c.looping)?)?;
-                output.controller.set_player_gain(player, c.gain)?;
-                c.prepared = Some(buffer);
-                c.loaded_looping = Some(c.looping);
+                self.show.cues.push(cue);
+                self.show.cues.sort_by_key(|c| c.slot);
             }
         }
+        self.dirty = true;
+        self.load_cue(slot);
         Ok(())
     }
 
-    /// Assigns a sound to a cue. If the cue was playing, it stops.
-    pub fn set_cue_sound(&mut self, cue: u32, sound: Sound) -> Result<()> {
-        let c = self.cue_mut(cue)?;
-        c.sound = Some(sound);
-        c.prepared = None;
-        self.reload(cue)
-    }
-
-    pub fn clear_cue(&mut self, cue: u32) -> Result<()> {
-        let c = self.cue_mut(cue)?;
-        c.sound = None;
-        c.prepared = None;
-        self.reload(cue)
-    }
-
-    /// Turns looping on or off. Takes effect immediately if the cue is
-    /// stopped, or the next time it is fired if it is playing.
-    pub fn set_cue_loop(&mut self, cue: u32, looping: bool) -> Result<()> {
-        let c = self.cue_mut(cue)?;
-        if c.looping == looping {
-            return Ok(());
+    pub fn remove_cue(&mut self, slot: u32) -> Result<()> {
+        if slot >= self.show.slots {
+            return Err(SessionError::InvalidCue(slot));
         }
-        c.looping = looping;
-        let playing = self
-            .output
-            .as_ref()
-            .is_some_and(|o| o.controller.is_playing(PlayerId(cue)));
-        if playing { Ok(()) } else { self.reload(cue) }
-    }
-
-    pub fn set_cue_gain(&mut self, cue: u32, gain: f32) -> Result<()> {
-        self.cue_mut(cue)?.gain = gain;
-        if let Some(output) = self.output.as_mut() {
-            output.controller.set_player_gain(PlayerId(cue), gain)?;
-        }
+        self.show.cues.retain(|c| c.slot != slot);
+        self.dirty = true;
+        self.load_cue(slot);
         Ok(())
     }
 
-    /// Plays a cue from the start (restarting it if already playing).
-    /// Firing an empty cue does nothing.
-    pub fn fire_cue(&mut self, cue: u32) -> Result<()> {
-        let c = self.cue_mut(cue)?;
-        if c.sound.is_none() {
+    /// Moves a cue to another pad, swapping with whatever is there.
+    pub fn move_cue(&mut self, from: u32, to: u32) -> Result<()> {
+        for s in [from, to] {
+            if s >= self.show.slots {
+                return Err(SessionError::InvalidCue(s));
+            }
+        }
+        for cue in &mut self.show.cues {
+            if cue.slot == from {
+                cue.slot = to;
+            } else if cue.slot == to {
+                cue.slot = from;
+            }
+        }
+        self.show.cues.sort_by_key(|c| c.slot);
+        self.dirty = true;
+        self.load_cue(from);
+        self.load_cue(to);
+        Ok(())
+    }
+
+    fn live_for(&mut self, slot: u32) -> Result<(&mut Live<B::Stream>, LoadedCue)> {
+        if slot >= self.show.slots {
+            return Err(SessionError::InvalidCue(slot));
+        }
+        let loaded = *self.loaded.get(&slot).ok_or(SessionError::NoOutput)?;
+        let live = self.outputs[loaded.output]
+            .live
+            .as_mut()
+            .ok_or(SessionError::NoOutput)?;
+        Ok((live, loaded))
+    }
+
+    /// Plays a cue from the start (restarting it if playing). Firing an
+    /// empty pad does nothing.
+    pub fn fire_cue(&mut self, slot: u32) -> Result<()> {
+        if slot < self.show.slots && self.show.cue(slot).is_none() {
             return Ok(());
         }
-        let stale = c.loaded_looping != Some(c.looping);
-        if self.output.is_none() {
-            return Err(SessionError::NoOutput);
-        }
-        if stale {
-            // A loop change made while the cue was playing.
-            self.reload(cue)?;
-        }
-        self.controller()?.restart(PlayerId(cue))?;
+        let (live, _) = self.live_for(slot)?;
+        live.controller.restart(PlayerId(slot))?;
+        Ok(())
+    }
+
+    /// Plays a cue from `seconds` into its timeline.
+    pub fn play_cue_from(&mut self, slot: u32, seconds: f64) -> Result<()> {
+        let (live, _) = self.live_for(slot)?;
+        let player = PlayerId(slot);
+        let position = seconds_to_samples(seconds, live.config.sample_rate);
+        live.controller.stop(player)?;
+        live.controller.seek(player, position)?;
+        live.controller.play(player)?;
         Ok(())
     }
 
     /// Stops a cue, fading out over `fade_seconds` (0 = immediately).
-    pub fn stop_cue(&mut self, cue: u32, fade_seconds: f64) -> Result<()> {
-        self.cue_mut(cue)?;
-        let rate = self.output_rate()?;
-        let fade = seconds_to_samples(fade_seconds, rate);
-        let controller = self.controller()?;
+    pub fn stop_cue(&mut self, slot: u32, fade_seconds: f64) -> Result<()> {
+        let (live, _) = self.live_for(slot)?;
+        let fade = seconds_to_samples(fade_seconds, live.config.sample_rate);
         if fade == 0 {
-            controller.stop(PlayerId(cue))?;
+            live.controller.stop(PlayerId(slot))?;
         } else {
-            controller.fade_out_and_stop(PlayerId(cue), fade)?;
+            live.controller.fade_out_and_stop(PlayerId(slot), fade)?;
         }
         Ok(())
     }
 
-    /// Stops everything, fading out over `fade_seconds` (0 = immediately).
+    /// Stops everything on every output.
     pub fn stop_all(&mut self, fade_seconds: f64) -> Result<()> {
-        let rate = self.output_rate()?;
-        let fade = seconds_to_samples(fade_seconds, rate);
-        self.controller()?.stop_all(fade)?;
+        for live in self.outputs.iter_mut().filter_map(|o| o.live.as_mut()) {
+            let fade = seconds_to_samples(fade_seconds, live.config.sample_rate);
+            live.controller.stop_all(fade)?;
+        }
         Ok(())
     }
 
     pub fn set_master_gain(&mut self, gain: f32) -> Result<()> {
         self.master_gain = gain;
-        if let Some(output) = self.output.as_mut() {
-            output.controller.set_master_gain(gain)?;
+        for live in self.outputs.iter_mut().filter_map(|o| o.live.as_mut()) {
+            live.controller.set_master_gain(gain)?;
         }
         Ok(())
     }
@@ -399,57 +845,109 @@ impl<B: AudioBackend> Session<B> {
         self.master_gain
     }
 
-    fn output_rate(&self) -> Result<u32> {
-        self.output
-            .as_ref()
-            .map(|o| o.config.sample_rate)
-            .ok_or(SessionError::NoOutput)
-    }
-
-    pub fn cue_state(&self, cue: u32) -> Result<CueState> {
-        let c = self
-            .cues
-            .get(cue as usize)
-            .ok_or(SessionError::InvalidCue(cue))?;
-        let (playing, position_seconds) = match &self.output {
-            Some(o) => (
-                o.controller.is_playing(PlayerId(cue)),
-                samples_to_seconds(o.controller.position(PlayerId(cue)), o.config.sample_rate),
-            ),
-            None => (false, 0.0),
+    pub fn cue_state(&self, slot: u32) -> Result<CueState> {
+        if slot >= self.show.slots {
+            return Err(SessionError::InvalidCue(slot));
+        }
+        let doc = self.show.cue(slot);
+        let mut state = CueState {
+            assigned: doc.is_some(),
+            looping: doc.is_some_and(|c| c.looping),
+            ..CueState::default()
         };
-        Ok(CueState {
-            assigned: c.sound.is_some(),
-            playing,
-            looping: c.looping,
-            gain: c.gain,
-            position_seconds,
-            duration_seconds: c.sound.as_ref().map_or(0.0, Sound::duration_seconds),
-        })
+        if let Some(loaded) = self.loaded.get(&slot)
+            && let Some(live) = &self.outputs[loaded.output].live
+        {
+            let player = PlayerId(slot);
+            state.ready = true;
+            state.playing = live.controller.is_playing(player);
+            state.position_seconds =
+                samples_to_seconds(live.controller.position(player), live.config.sample_rate);
+            state.duration_seconds = loaded.length_seconds;
+        }
+        Ok(state)
     }
 
-    /// Housekeeping: drains engine events and frees retired audio. Call
-    /// regularly from the UI (e.g. on its refresh timer).
+    /// Problems with cues (missing files, bad markers), for display.
+    pub fn problems(&self) -> &[CueProblem] {
+        &self.problems
+    }
+
+    /// One-off messages for the operator (failovers, reconnections).
+    pub fn take_notices(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.notices)
+    }
+
+    // ---- Housekeeping -------------------------------------------------
+
+    /// Drains engine events, frees retired audio, and handles device
+    /// failures. Call regularly from the UI (e.g. every 30 ms).
     pub fn poll(&mut self) {
-        if let Some(output) = self.output.as_mut() {
-            while output.controller.poll_event().is_some() {}
-            output.controller.collect_garbage();
+        for live in self.outputs.iter_mut().filter_map(|o| o.live.as_mut()) {
+            while live.controller.poll_event().is_some() {}
+            live.controller.collect_garbage();
+        }
+        let now = Instant::now();
+        for index in 0..self.outputs.len() {
+            let failed = self.outputs[index]
+                .live
+                .as_ref()
+                .map(|l| l.stream.status().health() != StreamHealth::Running);
+            match failed {
+                Some(true) => self.fail_over(index),
+                Some(false) => {}
+                None => {
+                    if self.outputs[index].retry_at.is_some_and(|t| t <= now)
+                        && self.open_output(index)
+                    {
+                        let state = &self.outputs_state()[index];
+                        self.notices.push(format!(
+                            "Output \"{}\" is back on \"{}\".",
+                            state.name,
+                            state.device_name.as_deref().unwrap_or("?")
+                        ));
+                    }
+                }
+            }
         }
     }
-}
 
-/// A cue's timeline: the whole sound, optionally looping forever.
-fn cue_timeline(buffer: &Arc<AudioBuffer>, looping: bool) -> Result<Timeline> {
-    let mut builder = Timeline::builder(buffer.sample_rate()).clip(Clip::new(Arc::clone(buffer)));
-    if looping {
-        builder = builder.marker(Marker::new(
-            0,
-            buffer.frames(),
-            MarkerAction::Loop {
-                to: 0,
-                count: LoopCount::Infinite,
-            },
-        ));
+    /// The device behind output `index` failed: reopen on the next best
+    /// device and resume whatever was playing, where it was.
+    fn fail_over(&mut self, index: usize) {
+        let Some(old) = self.outputs[index].live.take() else {
+            return;
+        };
+        let lost = old.device.name.clone();
+        let old_rate = old.config.sample_rate;
+        let resume: Vec<(u32, f64)> = self
+            .loaded
+            .iter()
+            .filter(|(_, l)| l.output == index)
+            .filter(|(slot, _)| old.controller.is_playing(PlayerId(**slot)))
+            .map(|(slot, _)| {
+                let position = old.controller.position(PlayerId(*slot));
+                (*slot, samples_to_seconds(position, old_rate))
+            })
+            .collect();
+        drop(old);
+
+        let name = self.show.outputs[index].name.clone();
+        if self.open_output(index) {
+            for (slot, seconds) in resume {
+                let _ = self.play_cue_from(slot, seconds);
+            }
+            let now_on = self.outputs[index]
+                .live
+                .as_ref()
+                .map_or_else(String::new, |l| l.device.name.clone());
+            self.notices.push(format!(
+                "Output \"{name}\" lost \"{lost}\"; now playing on \"{now_on}\"."
+            ));
+        } else {
+            self.notices.push(format!(
+                "Output \"{name}\" lost \"{lost}\" and no other device is available. Retrying…"
+            ));
+        }
     }
-    Ok(builder.build()?)
 }

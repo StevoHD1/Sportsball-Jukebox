@@ -10,18 +10,27 @@
 //! * On failure, a human-readable message is available from
 //!   `sbj_last_error_message` on the same thread.
 //! * A session may be used from any thread; calls are serialised by an
-//!   internal lock that the audio thread never touches. Sounds are
-//!   immutable once loaded and may be shared freely.
+//!   internal lock that the audio thread never touches. Slow work (decoding
+//!   audio files) happens *outside* that lock, so firing cues is never
+//!   blocked by a file load.
+//! * Structured data (shows, cues, outputs, status) crosses as JSON, using
+//!   the show file's schema (see `sbj-session/src/show.rs`). Strings
+//!   returned by the library must be freed with `sbj_string_free`.
 
 use std::cell::RefCell;
-use std::ffi::{CStr, c_char};
+use std::ffi::{CStr, CString, c_char};
 use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
 use sbj_backend::system::SystemBackend;
-use sbj_backend::{AudioBackend, DeviceId, DeviceInfo, StreamHealth};
+use sbj_backend::{AudioBackend, DeviceInfo};
 use sbj_engine::EngineError;
-use sbj_session::{Session, SessionError, Sound};
+use sbj_session::{
+    CueDoc, DecodeReport, OutputDoc, OutputStatus, Session, SessionError, Show, decode_files,
+    waveform,
+};
+use serde_json::json;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -35,14 +44,7 @@ pub enum SbjStatus {
     DeviceError = 6,
     MediaError = 7,
     Truncated = 8,
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SbjOutputHealth {
-    Running = 0,
-    DeviceLost = 1,
-    Failed = 2,
+    ShowError = 9,
 }
 
 pub const SBJ_ID_LEN: usize = 512;
@@ -58,22 +60,13 @@ pub struct SbjDeviceInfo {
 }
 
 #[repr(C)]
-pub struct SbjOutputInfo {
-    pub is_open: bool,
-    pub device_id: [c_char; SBJ_ID_LEN],
-    pub sample_rate: u32,
-    pub channels: u16,
-    pub health: SbjOutputHealth,
-    pub xruns: u64,
-}
-
-#[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SbjCueState {
     pub assigned: bool,
     pub playing: bool,
     pub looping: bool,
-    pub gain: f32,
+    /// Loaded on an open output, i.e. can fire.
+    pub ready: bool,
     pub position_seconds: f64,
     pub duration_seconds: f64,
 }
@@ -95,11 +88,8 @@ impl SbjSession {
     }
 }
 
-/// Opaque decoded sound.
-pub struct SbjSound(Sound);
-
 // ---------------------------------------------------------------------
-// Error reporting
+// Error reporting and helpers
 // ---------------------------------------------------------------------
 
 thread_local! {
@@ -120,12 +110,15 @@ fn session_status(r: Result<(), SessionError>) -> SbjStatus {
         Ok(()) => SbjStatus::Ok,
         Err(e) => {
             let status = match &e {
-                SessionError::InvalidCue(_) => SbjStatus::InvalidArgument,
+                SessionError::InvalidCue(_) | SessionError::InvalidOutput(_) => {
+                    SbjStatus::InvalidArgument
+                }
                 SessionError::NoOutput => SbjStatus::NoOutput,
                 SessionError::Backend(_) => SbjStatus::DeviceError,
                 SessionError::Media(_) => SbjStatus::MediaError,
+                SessionError::Show(_) => SbjStatus::ShowError,
                 SessionError::Engine(EngineError::QueueFull) => SbjStatus::QueueFull,
-                SessionError::Engine(_) | SessionError::Timeline(_) => SbjStatus::InternalError,
+                SessionError::Engine(_) => SbjStatus::InternalError,
             };
             fail(status, e.to_string())
         }
@@ -167,6 +160,35 @@ unsafe fn read_str<'a>(ptr: *const c_char) -> Result<Option<&'a str>, SbjStatus>
         .map_err(|_| fail(SbjStatus::InvalidArgument, "string is not valid UTF-8"))
 }
 
+/// # Safety
+/// As [`read_str`]; null is an error.
+unsafe fn required_str<'a>(ptr: *const c_char, what: &str) -> Result<&'a str, SbjStatus> {
+    // SAFETY: forwarded caller contract.
+    match unsafe { read_str(ptr) }? {
+        Some(s) => Ok(s),
+        None => Err(fail(SbjStatus::NullPointer, format!("{what} is null"))),
+    }
+}
+
+/// Hands a string to C; free with `sbj_string_free`.
+fn to_c(s: String) -> *mut c_char {
+    CString::new(s.replace('\0', ""))
+        .map(CString::into_raw)
+        .unwrap_or(std::ptr::null_mut())
+}
+
+/// Frees a string returned by this library. Null is ignored.
+///
+/// # Safety
+/// `s` must be null or a string returned by this library, not yet freed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sbj_string_free(s: *mut c_char) {
+    if !s.is_null() {
+        // SAFETY: the pointer came from `CString::into_raw` in `to_c`.
+        drop(unsafe { CString::from_raw(s) });
+    }
+}
+
 /// Copies the calling thread's last error message into `buf` (always
 /// NUL-terminated if `len > 0`). Returns the message length in bytes,
 /// excluding the terminator, so callers can detect truncation.
@@ -201,111 +223,29 @@ pub extern "C" fn sbj_version() -> *const c_char {
 /// library's. Callers pass `sizeof` each struct; the Swift app checks this
 /// at startup so a stale header fails loudly instead of corrupting memory.
 #[unsafe(no_mangle)]
-pub extern "C" fn sbj_abi_check(
-    device_info_size: usize,
-    output_info_size: usize,
-    cue_state_size: usize,
-) -> bool {
+pub extern "C" fn sbj_abi_check(device_info_size: usize, cue_state_size: usize) -> bool {
     device_info_size == std::mem::size_of::<SbjDeviceInfo>()
-        && output_info_size == std::mem::size_of::<SbjOutputInfo>()
         && cue_state_size == std::mem::size_of::<SbjCueState>()
 }
 
 // ---------------------------------------------------------------------
-// Sounds
+// Session lifecycle
 // ---------------------------------------------------------------------
 
-/// Decodes an audio file into memory. Slow (up to a second for long
-/// files): call it off the main thread. Pass the open output's sample
-/// rate as `target_sample_rate` (or 0 if unknown) so resampling also
-/// happens here rather than when the sound is assigned.
-///
-/// Returns null on failure, with `*status_out` (if non-null) set and the
-/// reason in `sbj_last_error_message`. Free with `sbj_sound_free`.
-///
-/// # Safety
-/// `path` must be a valid NUL-terminated UTF-8 string; `status_out` must be
-/// null or valid for writes.
+/// Creates a session with an empty show. No audio device is opened until
+/// `sbj_session_open_outputs`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn sbj_sound_load(
-    path: *const c_char,
-    target_sample_rate: u32,
-    status_out: *mut SbjStatus,
-) -> *mut SbjSound {
-    let mut result = std::ptr::null_mut();
-    let status = guard(|| {
-        // SAFETY: forwarded caller contract.
-        let path = match unsafe { read_str(path) } {
-            Ok(Some(p)) => p,
-            Ok(None) => return fail(SbjStatus::NullPointer, "path is null"),
-            Err(s) => return s,
-        };
-        let target = (target_sample_rate > 0).then_some(target_sample_rate);
-        match Sound::load(path, target) {
-            Ok(sound) => {
-                result = Box::into_raw(Box::new(SbjSound(sound)));
-                SbjStatus::Ok
-            }
-            Err(e) => session_status(Err(e)),
-        }
-    });
-    if !status_out.is_null() {
-        // SAFETY: guaranteed by the caller.
-        unsafe { *status_out = status };
-    }
-    result
-}
-
-/// Frees a sound. Cues it was assigned to keep their own reference.
-///
-/// # Safety
-/// `sound` must be null or from `sbj_sound_load`, not already freed.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn sbj_sound_free(sound: *mut SbjSound) {
-    if !sound.is_null() {
-        // SAFETY: the pointer came from `Box::into_raw`.
-        drop(unsafe { Box::from_raw(sound) });
-    }
-}
-
-/// # Safety
-/// `sound` must be null or a live sound.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn sbj_sound_duration_seconds(sound: *const SbjSound) -> f64 {
-    // SAFETY: guaranteed by the caller.
-    unsafe { sound.as_ref() }.map_or(0.0, |s| s.0.duration_seconds())
-}
-
-/// # Safety
-/// `sound` must be null or a live sound.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn sbj_sound_channels(sound: *const SbjSound) -> u16 {
-    // SAFETY: guaranteed by the caller.
-    unsafe { sound.as_ref() }.map_or(0, |s| s.0.channels())
-}
-
-// ---------------------------------------------------------------------
-// Session lifecycle and devices
-// ---------------------------------------------------------------------
-
-/// Creates a session with `cue_count` cue slots (1..=1024). No output is
-/// open yet. Returns null on invalid arguments.
-#[unsafe(no_mangle)]
-pub extern "C" fn sbj_session_create(cue_count: u32) -> *mut SbjSession {
-    if !(1..=1024).contains(&cue_count) {
-        set_error("cue count must be between 1 and 1024");
-        return std::ptr::null_mut();
-    }
+pub extern "C" fn sbj_session_create() -> *mut SbjSession {
     catch_unwind(|| {
         Box::into_raw(Box::new(SbjSession {
-            session: Mutex::new(Session::new(SystemBackend::new(), cue_count)),
+            session: Mutex::new(Session::new(SystemBackend::new())),
             devices: Mutex::new(Vec::new()),
         }))
     })
     .unwrap_or(std::ptr::null_mut())
 }
 
-/// Closes the output and frees the session. Null is ignored.
+/// Closes all outputs and frees the session. Null is ignored.
 ///
 /// # Safety
 /// `session` must be null or from `sbj_session_create`, not already
@@ -331,6 +271,90 @@ unsafe fn with_session(
     }
 }
 
+/// Runs `f` and returns its string (or null on failure) for C.
+///
+/// # Safety
+/// `session` must be null or a live session.
+unsafe fn session_string(
+    session: *const SbjSession,
+    f: impl FnOnce(&SbjSession) -> Result<String, SbjStatus>,
+) -> *mut c_char {
+    let mut out = std::ptr::null_mut();
+    // SAFETY: forwarded caller contract.
+    unsafe {
+        with_session(session, |s| match f(s) {
+            Ok(text) => {
+                out = to_c(text);
+                SbjStatus::Ok
+            }
+            Err(status) => status,
+        })
+    };
+    out
+}
+
+/// Opens every output's audio device and loads cues onto them.
+///
+/// # Safety
+/// `session` must be null or a live session.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sbj_session_open_outputs(session: *const SbjSession) -> SbjStatus {
+    // SAFETY: forwarded caller contract.
+    unsafe {
+        with_session(session, |s| {
+            s.lock().open_outputs();
+            SbjStatus::Ok
+        })
+    }
+}
+
+/// Housekeeping and device failover; call every ~30 ms from the UI.
+///
+/// # Safety
+/// `session` must be null or a live session.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sbj_session_poll(session: *const SbjSession) -> SbjStatus {
+    // SAFETY: forwarded caller contract.
+    unsafe {
+        with_session(session, |s| {
+            s.lock().poll();
+            SbjStatus::Ok
+        })
+    }
+}
+
+/// Name of the audio system in use ("CoreAudio" on macOS).
+///
+/// # Safety
+/// `session` must be null or a live session; `buf` valid for `len` bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sbj_session_backend_name(
+    session: *const SbjSession,
+    buf: *mut c_char,
+    len: usize,
+) -> SbjStatus {
+    if buf.is_null() || len == 0 {
+        return fail(SbjStatus::NullPointer, "buffer is null");
+    }
+    // SAFETY: forwarded caller contract.
+    unsafe {
+        with_session(session, |s| {
+            let name = s.lock().backend().name();
+            // SAFETY: caller guarantees `buf` holds `len` bytes.
+            let dst = std::slice::from_raw_parts_mut(buf, len);
+            if copy_str(name, dst) {
+                SbjStatus::Ok
+            } else {
+                SbjStatus::Truncated
+            }
+        })
+    }
+}
+
+// ---------------------------------------------------------------------
+// Devices
+// ---------------------------------------------------------------------
+
 /// Re-scans output devices and returns how many there are. Read each with
 /// `sbj_session_device_info`.
 ///
@@ -342,9 +366,10 @@ pub unsafe extern "C" fn sbj_session_device_count(session: *const SbjSession) ->
     // SAFETY: forwarded caller contract.
     unsafe {
         with_session(session, |s| {
-            let devices = match s.lock().devices() {
+            // Enumerate without holding the session lock (it can be slow).
+            let devices = match SystemBackend::new().output_devices() {
                 Ok(d) => d,
-                Err(e) => return session_status(Err(e)),
+                Err(e) => return session_status(Err(e.into())),
             };
             count = devices.len() as u32;
             *s.devices.lock().unwrap_or_else(|e| e.into_inner()) = devices;
@@ -387,123 +412,322 @@ pub unsafe extern "C" fn sbj_session_device_info(
     }
 }
 
-/// Opens an output device by id (from `sbj_session_device_info`), or the
-/// system default if `device_id` is null. Replaces any open output.
+// ---------------------------------------------------------------------
+// Show documents
+// ---------------------------------------------------------------------
+
+/// The current show as JSON (the show file format). Null on failure.
+/// Free with `sbj_string_free`.
 ///
 /// # Safety
-/// `session` must be null or a live session; `device_id` null or a valid
-/// NUL-terminated UTF-8 string.
+/// `session` must be null or a live session.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn sbj_session_open_output(
+pub unsafe extern "C" fn sbj_session_show_json(session: *const SbjSession) -> *mut c_char {
+    // SAFETY: forwarded caller contract.
+    unsafe { session_string(session, |s| Ok(s.lock().show().to_json())) }
+}
+
+/// Status as JSON, for the UI (poll a few times a second):
+/// `{"dirty": bool, "path": string|null, "outputs": [...],
+///   "problems": [{"slot", "message"}], "notices": [string]}`.
+/// Notices are returned once. Free with `sbj_string_free`.
+///
+/// # Safety
+/// `session` must be null or a live session.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sbj_session_status_json(session: *const SbjSession) -> *mut c_char {
+    // SAFETY: forwarded caller contract.
+    unsafe {
+        session_string(session, |s| {
+            let mut session = s.lock();
+            let outputs: Vec<_> = session
+                .outputs_state()
+                .into_iter()
+                .map(|o| {
+                    json!({
+                        "name": o.name,
+                        "status": match o.status {
+                            OutputStatus::Running => "running",
+                            OutputStatus::OnBackup => "on_backup",
+                            OutputStatus::Offline => "offline",
+                        },
+                        "device_id": o.device_id,
+                        "device_name": o.device_name,
+                        "sample_rate": o.sample_rate,
+                        "channels": o.channels,
+                        "xruns": o.xruns,
+                        "error": o.error,
+                    })
+                })
+                .collect();
+            let problems: Vec<_> = session
+                .problems()
+                .iter()
+                .map(|p| json!({"slot": p.slot, "message": p.message}))
+                .collect();
+            let status = json!({
+                "dirty": session.is_dirty(),
+                "path": session.show_path().map(|p| p.display().to_string()),
+                "outputs": outputs,
+                "problems": problems,
+                "notices": session.take_notices(),
+            });
+            Ok(status.to_string())
+        })
+    }
+}
+
+/// Replaces the show with a new empty one and opens its outputs.
+///
+/// # Safety
+/// `session` must be null or a live session.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sbj_session_new_show(session: *const SbjSession) -> SbjStatus {
+    // SAFETY: forwarded caller contract.
+    unsafe {
+        with_session(session, |s| {
+            s.lock().new_show();
+            SbjStatus::Ok
+        })
+    }
+}
+
+/// Opens a show file: reads it, decodes all its audio (slow; done without
+/// blocking playback controls), then switches to it. On failure the
+/// current show is untouched. Missing audio is reported in the status's
+/// `problems`, not as a failure.
+///
+/// # Safety
+/// `session` must be null or a live session; `path` a valid string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sbj_session_open_show(
     session: *const SbjSession,
-    device_id: *const c_char,
+    path: *const c_char,
 ) -> SbjStatus {
     // SAFETY: forwarded caller contract.
-    let id = match unsafe { read_str(device_id) } {
-        Ok(id) => id.map(|s| DeviceId(s.to_owned())),
+    let path = match unsafe { required_str(path, "path") } {
+        Ok(p) => PathBuf::from(p),
         Err(status) => return status,
     };
     // SAFETY: forwarded caller contract.
     unsafe {
         with_session(session, |s| {
-            session_status(s.lock().open_output(id.as_ref()))
-        })
-    }
-}
-
-/// # Safety
-/// `session` must be null or a live session.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn sbj_session_close_output(session: *const SbjSession) -> SbjStatus {
-    // SAFETY: forwarded caller contract.
-    unsafe {
-        with_session(session, |s| {
-            s.lock().close_output();
+            let show = match Show::load(&path) {
+                Ok(show) => show,
+                Err(e) => return fail(SbjStatus::ShowError, e.to_string()),
+            };
+            let rates = s.lock().output_rates();
+            let decoded = decode_files(&show.files(), path.parent(), &rates);
+            s.lock().install_show(show, Some(path), decoded);
             SbjStatus::Ok
         })
     }
 }
 
+/// Saves the show to `path`, or to its current file if `path` is null.
+///
 /// # Safety
-/// `session` must be null or a live session; `out` null or writable.
+/// `session` must be null or a live session; `path` null or a valid
+/// string.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn sbj_session_output_info(
+pub unsafe extern "C" fn sbj_session_save_show(
     session: *const SbjSession,
-    out: *mut SbjOutputInfo,
+    path: *const c_char,
 ) -> SbjStatus {
-    // SAFETY: guaranteed by the caller.
-    let Some(out) = (unsafe { out.as_mut() }) else {
-        return fail(SbjStatus::NullPointer, "out is null");
+    // SAFETY: forwarded caller contract.
+    let path = match unsafe { read_str(path) } {
+        Ok(p) => p.map(PathBuf::from),
+        Err(status) => return status,
     };
     // SAFETY: forwarded caller contract.
     unsafe {
         with_session(session, |s| {
-            match s.lock().output_state() {
-                None => {
-                    out.is_open = false;
-                    out.device_id[0] = 0;
-                    out.sample_rate = 0;
-                    out.channels = 0;
-                    out.health = SbjOutputHealth::Running;
-                    out.xruns = 0;
-                }
-                Some(o) => {
-                    out.is_open = true;
-                    copy_str(&o.device.0, &mut out.device_id);
-                    out.sample_rate = o.sample_rate;
-                    out.channels = o.channels;
-                    out.health = match o.health {
-                        StreamHealth::Running => SbjOutputHealth::Running,
-                        StreamHealth::DeviceLost => SbjOutputHealth::DeviceLost,
-                        StreamHealth::Failed => SbjOutputHealth::Failed,
-                    };
-                    out.xruns = o.xruns;
-                }
-            }
-            SbjStatus::Ok
+            let mut session = s.lock();
+            let Some(path) = path.or_else(|| session.show_path().map(Path::to_path_buf)) else {
+                return fail(SbjStatus::InvalidArgument, "the show has no file yet");
+            };
+            session_status(session.save_show(&path))
         })
     }
 }
 
-/// Housekeeping: drains engine events and frees retired audio. Call on the
-/// UI refresh timer.
+/// Renames the show and sets the grid size.
 ///
 /// # Safety
-/// `session` must be null or a live session.
+/// `session` must be null or a live session; `name` a valid string.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn sbj_session_poll(session: *const SbjSession) -> SbjStatus {
+pub unsafe extern "C" fn sbj_session_set_show_settings(
+    session: *const SbjSession,
+    name: *const c_char,
+    slots: u32,
+    columns: u32,
+) -> SbjStatus {
+    // SAFETY: forwarded caller contract.
+    let name = match unsafe { required_str(name, "name") } {
+        Ok(n) => n.to_owned(),
+        Err(status) => return status,
+    };
     // SAFETY: forwarded caller contract.
     unsafe {
         with_session(session, |s| {
-            s.lock().poll();
-            SbjStatus::Ok
+            session_status(s.lock().set_show_settings(&name, slots, columns))
         })
     }
+}
+
+/// Replaces the output list from a JSON array of outputs (show format).
+///
+/// # Safety
+/// `session` must be null or a live session; `json` a valid string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sbj_session_set_outputs_json(
+    session: *const SbjSession,
+    json: *const c_char,
+) -> SbjStatus {
+    // SAFETY: forwarded caller contract.
+    let outputs: Vec<OutputDoc> = match unsafe { required_str(json, "json") }.and_then(|j| {
+        serde_json::from_str(j)
+            .map_err(|e| fail(SbjStatus::InvalidArgument, format!("bad outputs: {e}")))
+    }) {
+        Ok(o) => o,
+        Err(status) => return status,
+    };
+    // SAFETY: forwarded caller contract.
+    unsafe { with_session(session, |s| session_status(s.lock().set_outputs(outputs))) }
 }
 
 // ---------------------------------------------------------------------
 // Cues
 // ---------------------------------------------------------------------
 
-/// Assigns a sound to a cue (the session keeps its own reference; the
-/// caller still frees `sound`). Stops the cue if it was playing.
+/// Decodes any of `files` not yet loaded, without holding the session
+/// lock, then adds them. Returns the files that failed, with reasons.
+fn preload(s: &SbjSession, files: Vec<String>) -> DecodeReport {
+    let (missing, dir, rates) = {
+        let session = s.lock();
+        let missing: Vec<String> = files
+            .into_iter()
+            .filter(|f| !session.has_sound(f))
+            .collect();
+        let dir = session
+            .show_path()
+            .and_then(Path::parent)
+            .map(Path::to_path_buf);
+        (missing, dir, session.output_rates())
+    };
+    if missing.is_empty() {
+        return DecodeReport::default();
+    }
+    let mut report = decode_files(&missing, dir.as_deref(), &rates);
+    let mut session = s.lock();
+    for (file, sound) in report.sounds.drain(..) {
+        session.add_sound(file, sound);
+    }
+    report
+}
+
+/// Adds or replaces a cue from JSON (one show-format cue object). Its
+/// audio is decoded first if needed (slow; call off the main thread).
+/// Files that fail to decode are reported in the status's `problems`.
 ///
 /// # Safety
-/// `session` and `sound` must be null or live.
+/// `session` must be null or a live session; `json` a valid string.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn sbj_session_set_cue_sound(
+pub unsafe extern "C" fn sbj_session_set_cue_json(
     session: *const SbjSession,
-    cue: u32,
-    sound: *const SbjSound,
+    json: *const c_char,
 ) -> SbjStatus {
-    // SAFETY: guaranteed by the caller.
-    let Some(sound) = (unsafe { sound.as_ref() }) else {
-        return fail(SbjStatus::NullPointer, "sound is null");
+    // SAFETY: forwarded caller contract.
+    let cue: CueDoc = match unsafe { required_str(json, "json") }.and_then(|j| {
+        serde_json::from_str(j)
+            .map_err(|e| fail(SbjStatus::InvalidArgument, format!("bad cue: {e}")))
+    }) {
+        Ok(c) => c,
+        Err(status) => return status,
     };
     // SAFETY: forwarded caller contract.
     unsafe {
         with_session(session, |s| {
-            session_status(s.lock().set_cue_sound(cue, sound.0.clone()))
+            preload(s, cue.clips.iter().map(|c| c.file.clone()).collect());
+            session_status(s.lock().set_cue(cue))
+        })
+    }
+}
+
+/// Decodes an audio file into the session's library so it can be shown
+/// (duration, waveform) before it is used by a cue. Slow; call off the
+/// main thread. Writes the duration to `duration_out` if non-null.
+///
+/// # Safety
+/// `session` must be null or a live session; `file` a valid string;
+/// `duration_out` null or writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sbj_session_load_sound(
+    session: *const SbjSession,
+    file: *const c_char,
+    duration_out: *mut f64,
+) -> SbjStatus {
+    // SAFETY: forwarded caller contract.
+    let file = match unsafe { required_str(file, "file") } {
+        Ok(f) => f.to_owned(),
+        Err(status) => return status,
+    };
+    // SAFETY: forwarded caller contract.
+    unsafe {
+        with_session(session, |s| {
+            let report = preload(s, vec![file.clone()]);
+            if let Some((_, why)) = report.failures.first() {
+                return fail(SbjStatus::MediaError, format!("{file}: {why}"));
+            }
+            let Some(buffer) = s.lock().sound_buffer(&file) else {
+                return fail(SbjStatus::MediaError, format!("{file}: not loaded"));
+            };
+            if !duration_out.is_null() {
+                // SAFETY: guaranteed by the caller.
+                *duration_out = buffer.frames() as f64 / f64::from(buffer.sample_rate());
+            }
+            SbjStatus::Ok
+        })
+    }
+}
+
+/// Fills `out` with `buckets` (min, max) pairs (so `2 * buckets` floats)
+/// describing a loaded sound's waveform. The file must have been loaded
+/// (by a cue or `sbj_session_load_sound`).
+///
+/// # Safety
+/// `session` must be null or a live session; `file` a valid string; `out`
+/// valid for `2 * buckets` floats.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sbj_session_waveform(
+    session: *const SbjSession,
+    file: *const c_char,
+    buckets: u32,
+    out: *mut f32,
+) -> SbjStatus {
+    if out.is_null() {
+        return fail(SbjStatus::NullPointer, "out is null");
+    }
+    // SAFETY: forwarded caller contract.
+    let file = match unsafe { required_str(file, "file") } {
+        Ok(f) => f.to_owned(),
+        Err(status) => return status,
+    };
+    // SAFETY: forwarded caller contract.
+    unsafe {
+        with_session(session, |s| {
+            // Grab the audio, then compute without holding the lock.
+            let Some(buffer) = s.lock().sound_buffer(&file) else {
+                return fail(SbjStatus::MediaError, format!("{file}: not loaded"));
+            };
+            let peaks = waveform(&buffer, buckets as usize);
+            // SAFETY: caller guarantees room for 2 * buckets floats.
+            let dst = std::slice::from_raw_parts_mut(out, 2 * buckets as usize);
+            for (pair, (lo, hi)) in dst.chunks_exact_mut(2).zip(peaks) {
+                pair[0] = lo;
+                pair[1] = hi;
+            }
+            SbjStatus::Ok
         })
     }
 }
@@ -532,22 +756,23 @@ macro_rules! cue_fn {
 }
 
 cue_fn!(
-    /// Empties a cue.
-    sbj_session_clear_cue() => |s, cue| s.clear_cue(cue));
+    /// Empties a pad.
+    sbj_session_remove_cue() => |s, slot| s.remove_cue(slot));
+cue_fn!(
+    /// Moves a cue to pad `to`, swapping with whatever is there.
+    sbj_session_move_cue(to: u32) => |s, slot| s.move_cue(slot, to));
 cue_fn!(
     /// Plays a cue from the start, restarting it if already playing.
-    sbj_session_fire_cue() => |s, cue| s.fire_cue(cue));
+    /// Firing an empty pad does nothing.
+    sbj_session_fire_cue() => |s, slot| s.fire_cue(slot));
+cue_fn!(
+    /// Plays a cue from `seconds` into its timeline.
+    sbj_session_play_cue_from(seconds: f64) => |s, slot| s.play_cue_from(slot, seconds));
 cue_fn!(
     /// Stops a cue, fading out over `fade_seconds` (0 = immediately).
-    sbj_session_stop_cue(fade_seconds: f64) => |s, cue| s.stop_cue(cue, fade_seconds));
-cue_fn!(
-    /// Turns looping on or off (applies on next fire if playing).
-    sbj_session_set_cue_loop(looping: bool) => |s, cue| s.set_cue_loop(cue, looping));
-cue_fn!(
-    /// Sets a cue's gain (linear; 1.0 = unchanged).
-    sbj_session_set_cue_gain(gain: f32) => |s, cue| s.set_cue_gain(cue, gain));
+    sbj_session_stop_cue(fade_seconds: f64) => |s, slot| s.stop_cue(slot, fade_seconds));
 
-/// Stops every cue, fading out over `fade_seconds` (0 = immediately).
+/// Stops every cue on every output, fading out over `fade_seconds`.
 ///
 /// # Safety
 /// `session` must be null or a live session.
@@ -560,7 +785,7 @@ pub unsafe extern "C" fn sbj_session_stop_all(
     unsafe { with_session(session, |s| session_status(s.lock().stop_all(fade_seconds))) }
 }
 
-/// Sets the master output gain (linear).
+/// Sets the master gain (linear) on every output.
 ///
 /// # Safety
 /// `session` must be null or a live session.
@@ -573,61 +798,43 @@ pub unsafe extern "C" fn sbj_session_set_master_gain(
     unsafe { with_session(session, |s| session_status(s.lock().set_master_gain(gain))) }
 }
 
-/// # Safety
-/// `session` must be null or a live session; `out` null or writable.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn sbj_session_cue_state(
-    session: *const SbjSession,
-    cue: u32,
-    out: *mut SbjCueState,
-) -> SbjStatus {
-    // SAFETY: guaranteed by the caller.
-    let Some(out) = (unsafe { out.as_mut() }) else {
-        return fail(SbjStatus::NullPointer, "out is null");
-    };
-    // SAFETY: forwarded caller contract.
-    unsafe {
-        with_session(session, |s| match s.lock().cue_state(cue) {
-            Ok(st) => {
-                *out = SbjCueState {
-                    assigned: st.assigned,
-                    playing: st.playing,
-                    looping: st.looping,
-                    gain: st.gain,
-                    position_seconds: st.position_seconds,
-                    duration_seconds: st.duration_seconds,
-                };
-                SbjStatus::Ok
-            }
-            Err(e) => session_status(Err(e)),
-        })
-    }
-}
-
-/// Name of the audio system in use ("CoreAudio" on macOS).
+/// Fills `out` with the state of `count` consecutive pads starting at
+/// `first` (one lock for the whole grid, for 30 Hz UI refresh).
 ///
 /// # Safety
-/// `session` must be null or a live session.
+/// `session` must be null or a live session; `out` valid for `count`
+/// entries.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn sbj_session_backend_name(
+pub unsafe extern "C" fn sbj_session_cue_states(
     session: *const SbjSession,
-    buf: *mut c_char,
-    len: usize,
+    first: u32,
+    count: u32,
+    out: *mut SbjCueState,
 ) -> SbjStatus {
-    if buf.is_null() || len == 0 {
-        return fail(SbjStatus::NullPointer, "buffer is null");
+    if out.is_null() {
+        return fail(SbjStatus::NullPointer, "out is null");
     }
     // SAFETY: forwarded caller contract.
     unsafe {
         with_session(session, |s| {
-            let name = s.lock().backend().name();
-            // SAFETY: caller guarantees `buf` holds `len` bytes.
-            let dst = std::slice::from_raw_parts_mut(buf, len);
-            if copy_str(name, dst) {
-                SbjStatus::Ok
-            } else {
-                SbjStatus::Truncated
+            let session = s.lock();
+            // SAFETY: caller guarantees room for `count` entries.
+            let dst = std::slice::from_raw_parts_mut(out, count as usize);
+            for (i, slot) in dst.iter_mut().enumerate() {
+                let st = match session.cue_state(first + i as u32) {
+                    Ok(st) => st,
+                    Err(e) => return session_status(Err(e)),
+                };
+                *slot = SbjCueState {
+                    assigned: st.assigned,
+                    playing: st.playing,
+                    looping: st.looping,
+                    ready: st.ready,
+                    position_seconds: st.position_seconds,
+                    duration_seconds: st.duration_seconds,
+                };
             }
+            SbjStatus::Ok
         })
     }
 }
@@ -645,6 +852,13 @@ mod tests {
             .into_owned()
     }
 
+    fn take(s: *mut c_char) -> String {
+        assert!(!s.is_null(), "{}", last_error());
+        let text = unsafe { CStr::from_ptr(s) }.to_str().unwrap().to_owned();
+        unsafe { sbj_string_free(s) };
+        text
+    }
+
     #[test]
     fn version_is_crate_version() {
         let v = unsafe { CStr::from_ptr(sbj_version()) };
@@ -652,27 +866,59 @@ mod tests {
     }
 
     #[test]
-    fn session_without_output() {
+    fn show_round_trip_without_devices() {
         unsafe {
-            let s = sbj_session_create(4);
+            let s = sbj_session_create();
             assert!(!s.is_null());
-            // CI machines have no audio devices: firing must fail cleanly.
-            assert_eq!(
-                sbj_session_fire_cue(s, 0),
-                SbjStatus::Ok,
-                "empty cue is a no-op"
+            assert_eq!(sbj_session_open_outputs(s), SbjStatus::Ok);
+
+            let cue = cr#"{"slot":2,"title":"Horn","clips":[{"file":"/nope.wav"}]}"#;
+            assert_eq!(sbj_session_set_cue_json(s, cue.as_ptr()), SbjStatus::Ok);
+            let show: serde_json::Value =
+                serde_json::from_str(&take(sbj_session_show_json(s))).unwrap();
+            assert_eq!(show["cues"][0]["title"], "Horn");
+
+            let status: serde_json::Value =
+                serde_json::from_str(&take(sbj_session_status_json(s))).unwrap();
+            assert_eq!(status["dirty"], true);
+            // CI machines have no audio devices.
+            assert_eq!(status["outputs"][0]["status"], "offline");
+            assert!(
+                status["problems"].as_array().unwrap().is_empty(),
+                "not loaded: no output"
             );
-            assert_eq!(sbj_session_stop_all(s, 0.5), SbjStatus::NoOutput);
-            assert!(last_error().contains("no audio output"));
-            assert_eq!(sbj_session_fire_cue(s, 99), SbjStatus::InvalidArgument);
 
-            let mut st = std::mem::zeroed::<SbjCueState>();
-            assert_eq!(sbj_session_cue_state(s, 1, &mut st), SbjStatus::Ok);
-            assert!(!st.assigned && st.gain == 1.0);
+            let mut states = [std::mem::zeroed::<SbjCueState>(); 3];
+            assert_eq!(
+                sbj_session_cue_states(s, 0, 3, states.as_mut_ptr()),
+                SbjStatus::Ok
+            );
+            assert!(states[2].assigned && !states[2].ready);
+            assert_eq!(sbj_session_fire_cue(s, 2), SbjStatus::NoOutput);
+            assert_eq!(sbj_session_fire_cue(s, 0), SbjStatus::Ok, "empty pad");
+            assert_eq!(sbj_session_fire_cue(s, 999), SbjStatus::InvalidArgument);
+            assert_eq!(sbj_session_move_cue(s, 2, 5), SbjStatus::Ok);
+            assert_eq!(sbj_session_remove_cue(s, 5), SbjStatus::Ok);
 
-            let mut info = std::mem::zeroed::<SbjOutputInfo>();
-            assert_eq!(sbj_session_output_info(s, &mut info), SbjStatus::Ok);
-            assert!(!info.is_open);
+            let outputs = cr#"[{"name":"Main"},{"name":"Locker"}]"#;
+            assert_eq!(
+                sbj_session_set_outputs_json(s, outputs.as_ptr()),
+                SbjStatus::Ok
+            );
+            assert_eq!(
+                sbj_session_set_outputs_json(s, c"[]".as_ptr()),
+                SbjStatus::ShowError
+            );
+            assert_eq!(
+                sbj_session_set_cue_json(s, c"{nope".as_ptr()),
+                SbjStatus::InvalidArgument
+            );
+            assert!(last_error().contains("bad cue"));
+            assert_eq!(
+                sbj_session_save_show(s, std::ptr::null()),
+                SbjStatus::InvalidArgument,
+                "no file yet"
+            );
             sbj_session_destroy(s);
         }
     }
@@ -680,24 +926,29 @@ mod tests {
     #[test]
     fn null_and_bad_arguments() {
         unsafe {
-            assert!(sbj_session_create(0).is_null());
             assert_eq!(
                 sbj_session_fire_cue(std::ptr::null(), 0),
                 SbjStatus::NullPointer
             );
+            assert!(sbj_session_show_json(std::ptr::null()).is_null());
             sbj_session_destroy(std::ptr::null_mut());
-            sbj_sound_free(std::ptr::null_mut());
-            assert_eq!(sbj_sound_duration_seconds(std::ptr::null()), 0.0);
-
-            let mut status = SbjStatus::Ok;
-            let missing = sbj_sound_load(c"/definitely/not/here.wav".as_ptr(), 0, &mut status);
-            assert!(missing.is_null());
-            assert_eq!(status, SbjStatus::MediaError);
+            sbj_string_free(std::ptr::null_mut());
+            let s = sbj_session_create();
+            assert_eq!(
+                sbj_session_open_show(s, c"/definitely/not/here.sbjshow".as_ptr()),
+                SbjStatus::ShowError
+            );
             assert!(
-                last_error().contains("could not read file"),
+                last_error().contains("could not read show"),
                 "{}",
                 last_error()
             );
+            let mut d = 0.0;
+            assert_eq!(
+                sbj_session_load_sound(s, c"/nope.wav".as_ptr(), &mut d),
+                SbjStatus::MediaError
+            );
+            sbj_session_destroy(s);
         }
     }
 

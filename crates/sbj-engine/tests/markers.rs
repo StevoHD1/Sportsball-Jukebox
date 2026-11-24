@@ -528,3 +528,20 @@ fn device_blocks_larger_than_the_mix_block_are_split() {
     let left: Vec<f32> = out.chunks(2).map(|f| f[0]).collect();
     assert_eq!(left, ramp(0..100));
 }
+
+#[test]
+fn gain_set_while_stopped_applies_instantly_but_ramps_while_playing() {
+    let mut config = sbj_engine::EngineConfig::new(RATE, 1);
+    config.gain_ramp_frames = 100;
+    let (mut c, mut r) = sbj_engine::Engine::create(config).unwrap();
+    c.load(P, constant(1.0, 10_000)).unwrap();
+    c.set_player_gain(P, 0.5).unwrap();
+    c.play(P).unwrap();
+    let out = render(&mut r, 10, 10);
+    assert!(out.iter().all(|&s| s == 0.5), "no ramp from the old gain");
+
+    c.set_player_gain(P, 0.0).unwrap();
+    let out = render(&mut r, 200, 50);
+    assert!(out[0] > 0.49 && out[0] < 0.5, "smoothed while audible");
+    assert!(out[100..].iter().all(|&s| s == 0.0));
+}

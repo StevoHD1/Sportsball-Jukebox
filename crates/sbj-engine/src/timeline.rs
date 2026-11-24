@@ -262,6 +262,12 @@ impl TimelineBuilder {
         self
     }
 
+    /// Removes every marker with `id` (e.g. one that failed validation).
+    pub fn without_marker(mut self, id: MarkerId) -> Self {
+        self.markers.retain(|m| m.id != id);
+        self
+    }
+
     /// Sets an explicit length. The timeline is never shorter than its
     /// furthest clip end or marker.
     pub fn length(mut self, length: Samples) -> Self {
