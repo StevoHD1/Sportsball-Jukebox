@@ -43,6 +43,7 @@ targets:
           - -lsbj_ffi
           - -framework AudioToolbox
           - -framework CoreAudio
+          - -framework CoreMIDI
           - -framework CoreFoundation
           - -framework Foundation
           - -liconv

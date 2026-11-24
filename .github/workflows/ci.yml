@@ -56,7 +56,7 @@ jobs:
         run: |
           cc -std=c11 -Wall -Wextra -Werror crates/sbj-ffi/tests/smoke.c \
             -I crates/sbj-ffi/include target/apple/libsbj_ffi.a \
-            -framework AudioToolbox -framework CoreAudio -framework CoreFoundation \
+            -framework AudioToolbox -framework CoreAudio -framework CoreMIDI -framework CoreFoundation \
             -framework Foundation -lobjc -liconv -o smoke
           ./smoke
       - name: Generate Xcode project
