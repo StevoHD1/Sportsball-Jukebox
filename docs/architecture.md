@@ -1,6 +1,6 @@
 # Sportsball Jukebox: Architecture
 
-Status: Phase 1 (first sound on a Mac). Last updated 2026-11-24.
+Status: Phase 2 (show building). Last updated 2026-11-24.
 
 ## Goals, in priority order
 
@@ -64,6 +64,12 @@ aligned needs continuous resampling. Without that requirement:
   others;
 - every cue and timeline is routed to exactly one interface (and a channel
   range on it).
+
+In the show, interfaces are referred to through **logical outputs**
+("Main", "Locker room"...). Each output names a preferred device and an
+optional backup; pads route to an output, never directly to a device.
+That keeps shows portable between venues and makes failover a property of
+the output.
 
 If sync is needed later, macOS aggregate devices (which apply drift
 correction) are the first thing to try, since they need no engine changes.
@@ -174,14 +180,68 @@ always finishes, even for a jump that targets itself.
 - Short crossfades on jumps and loops (a few milliseconds) to remove clicks
   at the edit point.
 
-## Reliability features (planned)
+## Show files
 
-- **Device failover**: when an interface disappears, re-route its cues to a
-  configured backup device and show it clearly in the UI.
+A show (`*.sbjshow`) is versioned JSON; the schema is defined by
+`crates/sbj-session/src/show.rs` and mirrored in Swift by
+`apple/SportsballJukebox/Show.swift`.
+
+```json
+{
+  "format": "sportsball-jukebox-show", "version": 1,
+  "name": "Home opener", "slots": 24, "columns": 6,
+  "outputs": [
+    { "name": "Main",
+      "device": { "id": "<Core Audio UID>", "name": "Scarlett 2i2" },
+      "backup": { "id": "...", "name": "MacBook Pro Speakers" } }
+  ],
+  "cues": [
+    { "slot": 0, "title": "Charge", "hotkey": "1", "output": 0,
+      "gain": 0.8, "loop": false, "color": "red",
+      "clips": [ { "file": "/Music/charge.wav", "start": 0, "offset": 1.5,
+                   "length": 12, "fade_in": 0.05, "fade_out": 0.5 } ],
+      "markers": [
+        { "id": 1, "name": "Vamp", "time": 4.0,
+          "action": { "kind": "jump", "to": { "time": 4.0 } } },
+        { "id": 2, "name": "Back", "time": 8.0,
+          "action": { "kind": "loop", "to": { "marker": 1 }, "count": 2 } } ] }
+  ]
+}
+```
+
+- Times are seconds; they become sample frames when a cue is loaded onto
+  an output at that device's rate.
+- Fields at their default value are omitted; readers must default them.
+  New fields must be optional. Breaking changes bump `version` and add a
+  migration in `Show::from_json`. Newer versions are refused with a
+  clear message.
+- Saves are atomic (write temp file, rename).
+- Audio is referenced by path. If a show moves (another Mac, a USB stick),
+  files are looked for next to the show and in an `Audio` folder beside
+  it.
+- A problem with one cue (missing file, bad marker target) is reported for
+  that pad; it never stops the rest of the show loading.
+
+The C API passes shows, cues and outputs as JSON in this same schema,
+which keeps the API small and the Swift side free of hand-written
+marshalling.
+
+## Reliability features
+
+- **Device failover (done)**: each output tries its preferred device,
+  then its backup, then the system default. When a device disappears
+  mid-show, `Session::poll` reopens the output on the next one and
+  resumes every cue that was playing from where it was, then tells the
+  operator. Outputs with no device keep retrying every 2 s.
+- **Loading never blocks firing (done)**: decoding happens outside the
+  session lock, in parallel.
+- **Autosave (done)**: shows save themselves a couple of seconds after
+  each change; untitled shows are kept in Application Support.
 - **Crash isolation**: the engine never depends on the UI thread, and a
-  frozen UI keeps playing. Show files autosave and recover after a crash.
-- **Pre-flight checks**: on show load, verify every file decodes, every
-  routed device exists, and memory use is acceptable.
+  frozen UI keeps playing.
+- **Pre-flight checks (partial)**: on load, every file's decode result and
+  each cue's marker targets are checked and reported per pad. Still to do:
+  memory budget, and a pre-game "everything OK?" summary.
 - **No disk I/O at fire time**: all audio for a show is decoded into memory
   at load time.
 
@@ -189,6 +249,7 @@ always finishes, even for a jump that targets itself.
 
 | Layer | How | Where |
 |---|---|---|
+| Session, shows, failover | Offline backend with several simulated devices that tests can unplug and re-plug | Linux CI |
 | Engine logic | Offline rendering with "ramp" buffers whose sample values encode their source frame index, so output proves exactly which frames played | Linux CI, every push |
 | Real-time safety | Allocation-counting global allocator during `process` | Linux CI |
 | C ABI | Rust tests, plus `tests/smoke.c` compiled against the public header | Linux and macOS CI |
@@ -231,10 +292,17 @@ CI.
 - CI builds the `.app`.
 - Next: first test session on the borrowed Mac (`docs/testing-on-mac.md`).
 
-**Phase 2: Show building**
-Timeline editor with waveforms, marker/action editor, show file format
-(versioned, autosaved), several interfaces at once (one engine each) with
-routing and failover, configurable hotkeys.
+**Phase 2: Show building (built; awaiting Mac testing)**
+- Show files: versioned JSON, atomic saves, autosave, reopen last show,
+  moved-show audio lookup, per-pad problem reporting.
+- Several interfaces at once: logical outputs, one engine each, pads
+  routed by output, preferred + backup devices, automatic failover that
+  resumes playback, retrying offline outputs.
+- Pad editor: timeline with waveform clips (move, trim, fades, volume)
+  and markers (jump/loop/pause/stop/fade-out; targets by time or marker;
+  repeat counts) with arrows to targets, play from cursor, live playhead.
+- Configurable hotkeys and colours, drag pads to rearrange, grid size.
+- Engine fix: a gain set while a player is stopped applies instantly.
 
 **Phase 3: Live operation and polish**
 MIDI/OSC/Stream Deck triggers, hot-cue banks, pre-flight checks,

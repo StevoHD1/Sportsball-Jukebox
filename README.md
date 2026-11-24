@@ -5,11 +5,15 @@ as a native macOS app. Inspired by Sports Sounds Pro, it adds
 sample-accurate timeline markers with actions (loop, jump, pause, fade) and
 support for several audio interfaces at once.
 
-**Status:** Phase 1. A first playable Mac app: a 24-pad cue grid with
-hotkeys, overlapping playback, looping, fades, Stop All and output device
-selection, on top of the Rust engine. Requires macOS 14.2+. See
-[docs/architecture.md](docs/architecture.md), and
-[docs/testing-on-mac.md](docs/testing-on-mac.md) to try it.
+**Status:** Phase 2. A Mac app with:
+- a configurable pad grid with hotkeys and colours;
+- show files that autosave;
+- several audio interfaces at once, with automatic failover to a backup;
+- a pad editor with a waveform timeline and markers that jump, loop,
+  pause, stop or fade.
+
+Requires macOS 14.2+. See [docs/architecture.md](docs/architecture.md),
+and [docs/testing-on-mac.md](docs/testing-on-mac.md) to try it.
 
 ## Layout
 
