@@ -17,11 +17,16 @@ struct ContentView: View {
                     PadGrid()
                         .padding(16)
                 }
+                // Take all the width the panel leaves (without this the
+                // row shrinks to its content and the pads get squeezed).
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 if model.showingNowPlaying {
                     Divider()
                     NowPlayingView()
+                        .frame(maxHeight: .infinity)
                 }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             Divider()
             ControlFooter()
         }
