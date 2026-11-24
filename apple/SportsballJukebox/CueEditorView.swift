@@ -228,28 +228,30 @@ private struct EditorHeader: View {
 
             HStack(spacing: 20) {
                 HStack(spacing: 6) {
-                    Text("Volume")
+                    Text("Volume").fixedSize()
                     Slider(value: gain, in: 0...2)
-                        .frame(width: 140)
+                        .frame(width: 120)
                     Text(gainLabel)
                         .font(.caption.monospacedDigit())
                         .frame(width: 54, alignment: .leading)
                 }
 
                 Toggle("Loop", isOn: $draft.loop)
+                    .fixedSize()
 
                 if model.show.levelMatch != nil {
                     Toggle("Level-match", isOn: $draft.levelMatch)
+                        .fixedSize()
                         .help("Off keeps this pad's files at their own level (e.g. a deliberately quiet bed)")
                 }
 
                 MidiField(trigger: $draft.midi, slot: draft.slot)
 
                 HStack(spacing: 6) {
-                    Text("Sponsor")
+                    Text("Sponsor").fixedSize()
                     TextField("none", text: sponsor)
                         .textFieldStyle(.roundedBorder)
-                        .frame(width: 140)
+                        .frame(width: 120)
                 }
                 .help("Credited in the Game Log's sponsor report each time this pad plays")
 
@@ -1202,9 +1204,22 @@ private struct PlaybackRow: View {
     let channels: Int
 
     var body: some View {
-        HStack(spacing: 20) {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 20) {
+                behaviour
+                Spacer()
+            }
+            HStack(spacing: 20) {
+                timing
+                Spacer()
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var behaviour: some View {
             HStack(spacing: 6) {
-                Text("Group")
+                Text("Group").fixedSize()
                 TextField("none", text: group)
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 110)
@@ -1213,6 +1228,7 @@ private struct PlaybackRow: View {
 
             HStack(spacing: 6) {
                 Toggle("Duck others", isOn: ducking)
+                    .fixedSize()
                 if ducking.wrappedValue {
                     Slider(value: duckDB, in: -40 ... -3)
                         .frame(width: 100)
@@ -1230,13 +1246,16 @@ private struct PlaybackRow: View {
             }
             .frame(width: 210)
             .help("What pressing the pad does while it plays (a vamp always continues)")
+    }
 
+    @ViewBuilder
+    private var timing: some View {
             HStack(spacing: 4) {
-                Text("Fade in")
+                Text("Fade in").fixedSize()
                 TextField("", value: $draft.fadeIn, format: .number.precision(.fractionLength(0...2)))
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 44)
-                Text("out")
+                Text("out").fixedSize()
                 TextField("", value: fadeOut, format: .number.precision(.fractionLength(0...2)))
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 44)
@@ -1254,8 +1273,6 @@ private struct PlaybackRow: View {
                 }
             }
             .frame(width: 200)
-            Spacer()
-        }
     }
 
     /// Stereo pairs, then single channels.
