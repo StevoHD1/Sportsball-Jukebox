@@ -374,6 +374,7 @@ private struct CueTimeline: View {
                 .allowsHitTesting(false)
             }
         }
+        .defaultScrollAnchor(.topLeading)
         .background(Color.black.opacity(0.15))
     }
 }

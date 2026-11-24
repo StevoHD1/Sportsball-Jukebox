@@ -285,10 +285,18 @@ error, warning or info.
 `cargo run --release -p sbj-engine --example bench` renders 30 s in
 128-frame blocks (a 2.7 ms deadline) with 1–128 players running at once,
 each looping with a marker. It reports the average and worst time per
-block as a share of the deadline. In a shared Linux container: 64 players
-average about 2% of the deadline, 128 about 5%. The worst-case blocks
-there are dominated by container scheduling noise. CI also runs the
-benchmark on macOS.
+block as a share of the deadline. On a GitHub macOS runner (Apple
+Silicon):
+
+| Players playing at once | Average | Worst block |
+|---|---|---|
+| 1 | 0.02% | 0.2% |
+| 16 | 0.3% | 1.5% |
+| 64 | 1.3% | 2.8% |
+| 128 | 2.6% | 5.8% |
+
+That leaves well over 90% of each 2.7 ms deadline spare even with 128
+sounds at once. CI reruns this on every macOS build.
 
 ## Testing strategy
 
