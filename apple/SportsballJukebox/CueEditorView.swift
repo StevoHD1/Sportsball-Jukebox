@@ -67,7 +67,7 @@ struct CueEditorView: View {
         }
         .frame(minWidth: 980, minHeight: 680)
         .onAppear(perform: load)
-        .onChange(of: draft.clips.map(\.file)) { files in
+        .onChange(of: draft.clips.map(\.file)) { _, files in
             files.forEach(model.loadAudioInfo(for:))
         }
     }
