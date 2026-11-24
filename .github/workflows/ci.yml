@@ -42,6 +42,8 @@ jobs:
     if: github.event_name != 'push' || github.ref == 'refs/heads/main'
     runs-on: macos-15
     timeout-minutes: 30
+    permissions:
+      contents: write  # manual runs commit refreshed screenshots
     env:
       MACOSX_DEPLOYMENT_TARGET: "14.2"
     steps:
@@ -95,6 +97,18 @@ jobs:
           name: screenshots
           path: screenshots/*.png
           retention-days: 30
+      - name: Commit screenshots to the branch (manual runs only)
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          mkdir -p docs/screenshots
+          cp screenshots/*.png docs/screenshots/
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/screenshots
+          if ! git diff --cached --quiet; then
+            git commit -m "Update screenshots [skip ci]"
+            git push origin "HEAD:${GITHUB_REF_NAME}" || echo "branch moved on; screenshots not committed"
+          fi
       - name: Engine benchmark
         run: cargo run --release -p sbj-engine --example bench
       - uses: actions/upload-artifact@v4
