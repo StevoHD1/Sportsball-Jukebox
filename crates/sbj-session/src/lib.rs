@@ -24,8 +24,8 @@ use sbj_backend::{
     AudioBackend, BackendError, DeviceInfo, OutputStream, StreamConfig, StreamHealth,
 };
 use sbj_engine::{
-    AudioBuffer, Controller, Engine, EngineConfig, EngineError, PlayerId, samples_to_seconds,
-    seconds_to_samples,
+    AudioBuffer, Controller, Engine, EngineConfig, EngineError, Event, PlayerId,
+    samples_to_seconds, seconds_to_samples,
 };
 use sbj_media::MediaError;
 
@@ -47,7 +47,7 @@ pub use preflight::{Check, CheckLevel, Preflight};
 pub use show::{
     ActionDoc, ActionKind, ClipDoc, ControlsDoc, CueDoc, CueProblem, CurveDoc, DEFAULT_FADE_OUT,
     DeviceRef, MAX_PADS_PER_BANK, MAX_SLOTS, MarkerDoc, MidiKind, MidiTrigger, OutputDoc,
-    PlaylistDoc, Retrigger, RouteDoc, Show, ShowError, TargetDoc,
+    PadTarget, PlaylistDoc, Retrigger, RouteDoc, Show, ShowError, TargetDoc,
 };
 
 /// How often to retry an output whose devices are all unavailable.
@@ -477,12 +477,13 @@ impl<B: AudioBackend> Session<B> {
         // Renumber cues if the bank size changed, keeping bank and pad.
         let mut moved = Vec::new();
         if slots != old_slots {
+            let renumber = |slot: u32| (slot / old_slots) * slots + slot % old_slots;
             for cue in &mut self.show.cues {
-                let (bank, pad) = (cue.slot / old_slots, cue.slot % old_slots);
                 moved.push(cue.slot);
-                cue.slot = bank * slots + pad;
+                cue.slot = renumber(cue.slot);
                 moved.push(cue.slot);
             }
+            self.remap_pads(renumber);
         }
         self.show.name = name.to_string();
         self.show.slots = slots;
@@ -600,6 +601,8 @@ impl<B: AudioBackend> Session<B> {
                 "a show needs at least one output".into(),
             )));
         }
+        let all: Vec<u32> = self.show.cues.iter().map(|c| c.slot).collect();
+        let before = self.reach(&all);
         let old = std::mem::replace(&mut self.show.outputs, outputs);
         let count = self.show.outputs.len();
         if self
@@ -631,6 +634,9 @@ impl<B: AudioBackend> Session<B> {
                 self.load_cue(slot);
             }
         }
+        // Markers on pads that now share (or no longer share) an output
+        // with the pad they act on.
+        self.reload_if_reach_changed(&all, &before, &[]);
         self.dirty = true;
         Ok(())
     }
@@ -836,7 +842,8 @@ impl<B: AudioBackend> Session<B> {
             return;
         };
         let audio = self.audio_at_rate(&cue, rate);
-        let (timeline, problems) = show::cue_timeline(&cue, rate, &audio);
+        let (timeline, problems) =
+            show::cue_timeline(&cue, rate, &audio, &|pad| self.pad_target(&cue, pad));
         for mut problem in problems {
             // Say why a file is missing when we know.
             if let Some(file) = problem.message.strip_prefix(show::MISSING_FILE)
@@ -933,6 +940,7 @@ impl<B: AudioBackend> Session<B> {
             self.add_decoded(decode_files(&missing, dir.as_deref(), &rates));
         }
         let slot = cue.slot;
+        let before = self.reach(&[slot]);
         match self.show.cues.iter_mut().find(|c| c.slot == slot) {
             Some(existing) => *existing = cue,
             None => {
@@ -942,6 +950,7 @@ impl<B: AudioBackend> Session<B> {
         }
         self.dirty = true;
         self.load_cue(slot);
+        self.reload_if_reach_changed(&[slot], &before, &[slot]);
         Ok(())
     }
 
@@ -949,9 +958,11 @@ impl<B: AudioBackend> Session<B> {
         if slot >= self.show.total_slots() {
             return Err(SessionError::InvalidCue(slot));
         }
+        let before = self.reach(&[slot]);
         self.show.cues.retain(|c| c.slot != slot);
         self.dirty = true;
         self.load_cue(slot);
+        self.reload_if_reach_changed(&[slot], &before, &[slot]);
         Ok(())
     }
 
@@ -962,18 +973,104 @@ impl<B: AudioBackend> Session<B> {
                 return Err(SessionError::InvalidCue(s));
             }
         }
+        let swap = |slot: u32| match slot {
+            s if s == from => to,
+            s if s == to => from,
+            s => s,
+        };
         for cue in &mut self.show.cues {
-            if cue.slot == from {
-                cue.slot = to;
-            } else if cue.slot == to {
-                cue.slot = from;
-            }
+            cue.slot = swap(cue.slot);
         }
+        // Markers keep acting on the same sound, wherever it moved.
+        let referrers = self.remap_pads(swap);
         self.show.cues.sort_by_key(|c| c.slot);
         self.dirty = true;
         self.load_cue(from);
         self.load_cue(to);
+        for slot in referrers {
+            if slot != from && slot != to {
+                self.load_cue(slot);
+            }
+        }
         Ok(())
+    }
+
+    /// Rewrites the pads that Fire/StopPad markers act on; returns the
+    /// slots of the cues whose markers changed.
+    fn remap_pads(&mut self, map: impl Fn(u32) -> u32) -> Vec<u32> {
+        let mut changed = Vec::new();
+        for cue in &mut self.show.cues {
+            let mut touched = false;
+            for marker in &mut cue.markers {
+                if let Some(pad) = marker.action.target_pad() {
+                    let new = map(pad);
+                    if new != pad {
+                        marker.action.pad = Some(new);
+                        touched = true;
+                    }
+                }
+            }
+            if touched {
+                changed.push(cue.slot);
+            }
+        }
+        changed
+    }
+
+    /// How a marker on `from` reaches the pad in `slot`.
+    pub(crate) fn pad_target(&self, from: &CueDoc, slot: u32) -> PadTarget {
+        match self.show.cue(slot) {
+            None => PadTarget::Empty,
+            Some(target)
+                if target.playlist.is_some()
+                    || self.output_index(target) != self.output_index(from) =>
+            {
+                PadTarget::Elsewhere
+            }
+            Some(target) => PadTarget::Local {
+                fade_in: target.fade_in,
+                fade_out: target.fade_out_seconds(),
+            },
+        }
+    }
+
+    /// (referrer, target, how) for every marker acting on one of `slots`.
+    fn reach(&self, slots: &[u32]) -> Vec<(u32, u32, PadTarget)> {
+        let mut out = Vec::new();
+        for cue in &self.show.cues {
+            for marker in &cue.markers {
+                if let Some(pad) = marker.action.target_pad()
+                    && slots.contains(&pad)
+                {
+                    out.push((cue.slot, pad, self.pad_target(cue, pad)));
+                }
+            }
+        }
+        out
+    }
+
+    /// After `slots` changed, reloads the cues whose markers now reach
+    /// them differently (their timelines bake that in), except those in
+    /// `fresh` (just loaded).
+    fn reload_if_reach_changed(
+        &mut self,
+        slots: &[u32],
+        before: &[(u32, u32, PadTarget)],
+        fresh: &[u32],
+    ) {
+        let after = self.reach(slots);
+        let mut stale: Vec<u32> = before
+            .iter()
+            .filter(|b| !after.contains(b))
+            .chain(after.iter().filter(|a| !before.contains(a)))
+            .map(|r| r.0)
+            .filter(|r| !fresh.contains(r))
+            .collect();
+        stale.sort_unstable();
+        stale.dedup();
+        for slot in stale {
+            self.load_cue(slot);
+        }
     }
 
     fn live_for(&mut self, slot: u32) -> Result<(&mut Live<B::Stream>, LoadedCue)> {
@@ -1100,10 +1197,21 @@ impl<B: AudioBackend> Session<B> {
     /// Drains engine events, frees retired audio, and handles device
     /// failures. Call regularly from the UI (e.g. every 30 ms).
     pub fn poll(&mut self) {
+        let mut reached = Vec::new();
         for live in self.outputs.iter_mut().filter_map(|o| o.live.as_mut()) {
-            while live.controller.poll_event().is_some() {}
+            while let Some(event) = live.controller.poll_event() {
+                match event {
+                    Event::Triggered { player, .. } | Event::MarkerReached { player, .. }
+                        if player.0 < MAX_SLOTS =>
+                    {
+                        reached.push(event);
+                    }
+                    _ => {}
+                }
+            }
             live.controller.collect_garbage();
         }
+        self.handle_marker_events(&reached);
         self.log.source = "auto";
         self.advance_playlists();
         self.log.source = "operator";

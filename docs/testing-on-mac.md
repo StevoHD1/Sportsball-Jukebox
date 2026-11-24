@@ -189,6 +189,23 @@ built-in speakers or headphones)
 - [ ] Game Log: remote presses are listed with the source "remote".
 - [ ] Turn the remote off: the phone shows "Offline — retrying".
 
+**Phase 9: markers that fire and stop pads**
+- [ ] In a pad editor, add a marker and set its action to **Fire Pad**,
+      choosing a short sound (e.g. a horn) on the same output. Fire the
+      pad: the horn lands exactly on the marker every time, in time with
+      the music. The editor says "Same output: sample-exact".
+- [ ] Put the marker on a beat and loop the section (Loop marker): the
+      horn hits on the same beat each pass.
+- [ ] **Stop Pad**: fire a crowd loop, then a song with a Stop Pad marker
+      for the crowd loop: it fades at the marker.
+- [ ] **Volume**: add a marker at -12 dB over 0.5 s, and a later one at
+      0 dB: the music dips, then comes back. Fire again: it starts at
+      full volume.
+- [ ] Choose a target on another output (or a playlist pad): it still
+      fires, a moment after the marker.
+- [ ] Drag the target pad to another spot in the grid: the marker still
+      fires it. Game Log lists those plays with the source "marker".
+
 **Stress**
 - [ ] Leave a looping cue running for 10+ minutes. The status line should
       not start showing "glitches".

@@ -61,6 +61,13 @@ OSC tool):
 oscsend <mac-ip> 53100 /sbj/fire/3
 ```
 
+## Markers
+
+Markers inside a pad can also fire, stop or change the volume of pads
+(Fire Pad, Stop Pad and Volume in the pad editor). Plays started this way
+are logged with the source `marker`. See `docs/architecture.md` (pad
+markers) for timing.
+
 ## Phone and tablet remote
 
 The app can serve a web page on the local network, so a producer or a

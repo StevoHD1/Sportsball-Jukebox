@@ -4,10 +4,10 @@
 use std::time::{Duration, Instant};
 
 use sbj_backend::AudioBackend;
-use sbj_engine::{PlayerId, seconds_to_samples};
+use sbj_engine::{Event, PlayerId, seconds_to_samples};
 
-use crate::show::Retrigger;
-use crate::{Result, Session};
+use crate::show::{ActionKind, PadTarget, Retrigger};
+use crate::{CueDoc, DEFAULT_FADE_OUT, Result, Session};
 
 /// A fired cue counts as playing for this long even before the audio
 /// thread reports it (it starts at the next audio block).
@@ -97,6 +97,60 @@ impl<B: AudioBackend> Session<B> {
             }
         }
         self.update_ducking();
+    }
+
+    /// Follows up markers that act on other pads (called from `poll` with
+    /// the engine events). Pads on the same output were already started
+    /// or stopped by the engine at the marker's exact sample; here they
+    /// get what firing a pad also does (log entry, group hand-over,
+    /// ducking). Pads on other outputs, and playlists, are fired or
+    /// stopped now. Logged with the source "marker".
+    pub(crate) fn handle_marker_events(&mut self, events: &[Event]) {
+        for event in events {
+            match *event {
+                Event::Triggered { player, .. } => {
+                    let slot = player.0;
+                    let Some(cue) = self.show.cue(slot).cloned() else {
+                        continue;
+                    };
+                    self.log.source = "marker";
+                    self.log_start(slot, None);
+                    self.after_start(slot, &cue);
+                }
+                Event::MarkerReached { player, marker, .. } => {
+                    let Some(source) = self.show.cue(player.0) else {
+                        continue;
+                    };
+                    let Some(doc) = source.markers.iter().find(|m| m.id == marker.0) else {
+                        continue;
+                    };
+                    let (action, name) = (doc.action, doc.name.clone());
+                    let Some(pad) = action.target_pad() else {
+                        continue;
+                    };
+                    if self.pad_target(source, pad) != PadTarget::Elsewhere {
+                        continue; // done by the engine
+                    }
+                    self.log.source = "marker";
+                    let result = if action.kind == ActionKind::Fire {
+                        self.fire_cue(pad)
+                    } else {
+                        let fade = action.seconds.unwrap_or_else(|| {
+                            self.show
+                                .cue(pad)
+                                .map_or(DEFAULT_FADE_OUT, CueDoc::fade_out_seconds)
+                        });
+                        self.stop_cue(pad, fade)
+                    };
+                    if let Err(e) = result {
+                        self.notices
+                            .push(format!("Marker \"{name}\" could not act on its pad: {e}"));
+                    }
+                }
+                _ => {}
+            }
+        }
+        self.log.source = "operator";
     }
 
     /// Playing, or fired so recently the audio thread has not started it.

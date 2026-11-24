@@ -421,6 +421,12 @@ pub enum ActionKind {
     Pause,
     Stop,
     FadeOut,
+    /// Fire another pad (`pad`), as if pressed.
+    Fire,
+    /// Stop another pad (`pad`) over `seconds` (default: its fade-out).
+    StopPad,
+    /// Ramp this pad's volume to `db` over `seconds` (default 0 s).
+    Volume,
 }
 
 /// Where a jump or loop goes: a time, or another marker's position.
@@ -451,6 +457,12 @@ pub struct ActionDoc {
     /// then continue past this marker. Overrides `count`.
     #[serde(default, skip_serializing_if = "is_false")]
     pub hold: bool,
+    /// Fire/StopPad: the target pad's slot (`bank * slots + pad`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pad: Option<u32>,
+    /// Volume: level in dB (0 = as set on the pad, negative = quieter).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub db: Option<f32>,
 }
 
 impl ActionDoc {
@@ -461,8 +473,31 @@ impl ActionDoc {
             count: None,
             seconds: None,
             hold: false,
+            pad: None,
+            db: None,
         }
     }
+
+    /// The pad this action fires or stops, if any.
+    pub fn target_pad(&self) -> Option<u32> {
+        match self.kind {
+            ActionKind::Fire | ActionKind::StopPad => self.pad,
+            _ => None,
+        }
+    }
+}
+
+/// How a marker can reach the pad it fires or stops.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PadTarget {
+    /// No cue there (or no such slot).
+    Empty,
+    /// A plain pad on the same output: the engine acts on it at the exact
+    /// sample. Its fade times are baked into the marker.
+    Local { fade_in: f64, fade_out: f64 },
+    /// On another output, or a playlist: the session acts on it when it
+    /// sees the marker reached (within one poll).
+    Elsewhere,
 }
 
 /// What pressing a pad does while it is already playing.
@@ -656,6 +691,7 @@ pub fn cue_timeline(
     cue: &CueDoc,
     rate: u32,
     audio: &HashMap<String, Arc<AudioBuffer>>,
+    pads: &dyn Fn(u32) -> PadTarget,
 ) -> (Timeline, Vec<CueProblem>) {
     let mut problems = Vec::new();
     let mut problem = |message: String| {
@@ -748,6 +784,44 @@ pub fn cue_timeline(
             ActionKind::FadeOut => MarkerAction::FadeOut {
                 length: secs(marker.action.seconds.unwrap_or(1.0)),
             },
+            ActionKind::Fire | ActionKind::StopPad => {
+                let Some(pad) = marker.action.pad else {
+                    problem(format!("marker \"{}\" has no pad to act on", marker.name));
+                    continue;
+                };
+                let player = sbj_engine::PlayerId(pad);
+                match (pads(pad), marker.action.kind) {
+                    (PadTarget::Empty, _) => {
+                        problem(format!("marker \"{}\" acts on an empty pad", marker.name));
+                        continue;
+                    }
+                    (PadTarget::Elsewhere, _) => MarkerAction::Notify,
+                    (PadTarget::Local { fade_in, .. }, ActionKind::Fire) => MarkerAction::Start {
+                        player,
+                        fade_in: secs(fade_in),
+                    },
+                    (PadTarget::Local { fade_out, .. }, _) => MarkerAction::StopPlayer {
+                        player,
+                        fade: secs(marker.action.seconds.unwrap_or(fade_out)),
+                    },
+                }
+            }
+            ActionKind::Volume => {
+                let db = marker.action.db.unwrap_or(0.0);
+                let db = if db.is_finite() {
+                    db.clamp(-96.0, 12.0)
+                } else {
+                    0.0
+                };
+                MarkerAction::Level {
+                    gain: if db <= -96.0 {
+                        0.0
+                    } else {
+                        10f32.powf(db / 20.0)
+                    },
+                    length: secs(marker.action.seconds.unwrap_or(0.0)),
+                }
+            }
         };
         last_marker = last_marker.max(position);
         builder = builder.marker(Marker {

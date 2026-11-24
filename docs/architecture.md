@@ -1,6 +1,6 @@
 # Sportsball Jukebox: Architecture
 
-Status: Phase 8 (phone/tablet remote). Last updated 2026-11-24.
+Status: Phase 9 (markers that fire and stop pads). Last updated 2026-11-24.
 
 ## Goals, in priority order
 
@@ -151,6 +151,24 @@ timeline.
 | `Pause` | Halt at the marker. Play resumes from there, past the marker. |
 | `Stop` | Halt and return to the start. |
 | `FadeOut { length }` | Fade everything to silence over `length` frames, then stop. |
+| `Start { player, fade_in }` | Start another player of the same engine from the top, at this exact sample (fading in over `fade_in`). If it is playing it restarts; if it is holding a vamp it is released instead. Reported as `Event::Triggered`. |
+| `StopPlayer { player, fade }` | Stop another player of the same engine at this exact sample, over `fade` frames (0 = the 3 ms declick stop). |
+| `Level { gain, length }` | Ramp this player's marker level to `gain` over `length` frames. It multiplies the player gain (cue gain, ducking, fade-in), so ducking and fades still work, and resets to 1.0 on stop or restart. |
+| `Notify` | Nothing in the engine; the control side acts on the `MarkerReached` event. |
+
+**Cross-player actions at the exact sample (Phase 9).** Players render
+one after another, so a marker on player 5 at frame 37 of a block cannot
+start player 2 at frame 37 if player 2 has already rendered the block.
+Instead, timelines with `Start`/`StopPlayer` markers mark their player as
+one that "acts on others". `Renderer::process` splits each block into
+slices that end at the next marker of any such player. At each slice
+boundary those players fire their markers first (`Player::prepare`),
+which only collects the cross-player actions into a preallocated list;
+the actions are applied (in firing order); then every player renders the
+slice. So every player is at the same sample when an action applies,
+chains (A starts B, B's marker starts C) stay exact, and blocks with no
+such timelines render as one slice, exactly as before. Actions beyond the
+list's capacity (256 at one instant) are dropped and counted.
 
 ### Marker semantics
 
@@ -182,16 +200,30 @@ soft ending. The crossfade uses a second preallocated scratch buffer, so
 it keeps the no-allocation guarantee, and tests check it sample by
 sample.
 
-### Planned marker actions
+### Pad markers in the show (Phase 9)
 
-- Trigger another cue or timeline, possibly on another interface.
-- Jump to a named marker instead of a raw position.
-- Conditional / "armed" markers: loop until the operator presses a key,
-  then continue at the next musical boundary. This is common for walk-up
-  music and intros.
-- Volume ramp to a level, rather than only fade-to-stop.
-- Short crossfades on jumps and loops (a few milliseconds) to remove clicks
-  at the edit point.
+The show's marker kinds `fire`, `stop_pad` and `volume` map onto the
+actions above (`sbj-session/src/show.rs`, `cue_timeline`):
+
+- `fire` / `stop_pad` with `pad` (a slot). If the target is a plain pad on
+  the **same output**, the marker becomes `Start` / `StopPlayer` and the
+  engine acts at the exact sample; the target's fade-in (fire) or
+  fade-out (stop, unless `seconds` is given) is baked in. The session
+  then gives a fired pad what pressing it also does, from the
+  `Triggered` event on its next poll: a log entry (source `marker`),
+  the exclusive-group hand-over and ducking.
+- If the target is on **another output** (another device, so another
+  engine and clock) or is a **playlist**, the marker becomes `Notify` and
+  the session fires or stops the pad when it sees `MarkerReached`, within
+  one poll (about 30 ms). Without sync between devices, sample accuracy
+  across them would be meaningless anyway.
+- `volume` with `db` and `seconds` becomes `Level`.
+- How a marker reaches its target is baked into the source pad's
+  timeline, so the session reloads source pads when that changes (the
+  target moves output, becomes a playlist, changes its fades, is emptied
+  or filled). Moving pads and renumbering banks rewrite `pad` so markers
+  keep acting on the same sound. The preview player never acts on other
+  pads.
 
 ## Show files
 
@@ -217,7 +249,11 @@ A show (`*.sbjshow`) is versioned JSON; the schema is defined by
         { "id": 1, "name": "Vamp", "time": 4.0,
           "action": { "kind": "jump", "to": { "time": 4.0 } } },
         { "id": 2, "name": "Back", "time": 8.0,
-          "action": { "kind": "loop", "to": { "marker": 1 }, "count": 2 } } ] }
+          "action": { "kind": "loop", "to": { "marker": 1 }, "count": 2 } },
+        { "id": 3, "name": "Horn", "time": 9.5,
+          "action": { "kind": "fire", "pad": 1 } },
+        { "id": 4, "name": "Under PA", "time": 10.0,
+          "action": { "kind": "volume", "db": -12, "seconds": 0.5 } } ] }
   ]
 }
 ```
@@ -357,7 +393,7 @@ and the cue plays on all channels.
 `sbj-session/src/log.rs` records each time a pad or playlist song starts:
 the time, game name, show, bank and pad, title, the audio file, the
 sponsor (a per-pad field), the output, and what triggered it (`operator`,
-`midi`, `osc`, `remote`, or `auto` for playlist auto-advance). Entries close when
+`midi`, `osc`, `remote`, `marker`, or `auto` for playlist auto-advance). Entries close when
 the sound stops, finishes or is replaced, and the time played is
 measured on the wall clock. Closed entries are appended as JSON lines to
 `<log dir>/YYYY-MM-DD.jsonl` (UTC days) straight away, so a crash loses
@@ -491,6 +527,12 @@ CI.
 - Web page served by the app on the local network: banks, pads with
   colours and progress, Now Playing with countdowns, Stop, GO, Stop All.
 - 6-digit PIN, QR code that signs in, presses logged as `remote`.
+
+**Phase 9: Pad markers (built; awaiting Mac testing)**
+- Marker actions Fire pad, Stop pad and Volume. Sample-exact on the same
+  output (the renderer lines all players up at such markers); within a
+  poll on another output.
+- References follow pads that move; plays are logged as `marker`.
 
 **Next candidates**
 - Signed releases once there is a Developer account.

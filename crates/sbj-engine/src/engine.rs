@@ -121,6 +121,12 @@ pub enum Event {
     ReachedEnd {
         player: PlayerId,
     },
+    /// A [`crate::MarkerAction::Start`] marker on `by` started or
+    /// restarted `player` (not sent when it only released a vamp).
+    Triggered {
+        player: PlayerId,
+        by: PlayerId,
+    },
 }
 
 pub(crate) enum Command {

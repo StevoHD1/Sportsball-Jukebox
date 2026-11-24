@@ -20,14 +20,23 @@ pub(crate) struct LoadedTimeline {
     /// Remaining jumps for each `Loop { count: Times(n) }` marker, indexed
     /// like `timeline.markers()`.
     loop_remaining: Vec<u32>,
+    /// Has markers that act on other players, so the renderer must line
+    /// every player up at this timeline's markers (see
+    /// [`Renderer::process`]).
+    acts_on_others: bool,
 }
 
 impl LoadedTimeline {
     pub(crate) fn new(timeline: Timeline) -> Self {
         let loop_remaining = vec![0; timeline.markers().len()];
+        let acts_on_others = timeline
+            .markers()
+            .iter()
+            .any(|m| m.action.targets_player().is_some());
         let mut loaded = Self {
             timeline,
             loop_remaining,
+            acts_on_others,
         };
         loaded.reset_loops();
         loaded
@@ -153,10 +162,13 @@ enum MarkerFlow {
     Changed,
 }
 
-/// Sends events without blocking; counts drops instead.
+/// Sends events without blocking; counts drops instead. Also collects
+/// marker actions aimed at other players, which the renderer applies once
+/// every player has reached the same sample.
 struct Outbox<'a> {
     events: &'a mut Producer<Event>,
     shared: &'a Shared,
+    requests: &'a mut Vec<Request>,
 }
 
 impl Outbox<'_> {
@@ -165,7 +177,27 @@ impl Outbox<'_> {
             self.shared.dropped_events.fetch_add(1, Ordering::Relaxed);
         }
     }
+
+    fn request(&mut self, request: Request) {
+        // Never grow the vector: that would allocate on the audio thread.
+        if self.requests.len() < self.requests.capacity() {
+            self.requests.push(request);
+        } else {
+            self.shared.dropped_events.fetch_add(1, Ordering::Relaxed);
+        }
+    }
 }
+
+/// A marker action on another player, waiting to be applied.
+#[derive(Clone, Copy)]
+struct Request {
+    by: PlayerId,
+    action: MarkerAction,
+}
+
+/// Most cross-player marker actions applied at one instant; more are
+/// dropped (and counted with the dropped events).
+const MAX_REQUESTS: usize = 256;
 
 /// A short crossfade from where the playhead was to where it jumped, so
 /// jumps, loops, retriggers and seeks do not click.
@@ -190,6 +222,8 @@ struct Player {
     /// Released from the current "until released" loop.
     released: bool,
     route: Route,
+    /// Set by `Level` markers; multiplies `gain`.
+    level: GainRamp,
 }
 
 /// Which output channels a player feeds.
@@ -225,7 +259,69 @@ impl Player {
             declick,
             released: false,
             route: Route::ALL,
+            level: GainRamp::new(1.0, 0),
         }
+    }
+
+    fn acts_on_others(&self) -> bool {
+        self.transport.playing && self.timeline.as_ref().is_some_and(|t| t.acts_on_others)
+    }
+
+    /// Fires the markers at the playhead (and stops at the end of the
+    /// timeline) without rendering, so that cross-player actions are
+    /// collected before any player renders past this instant.
+    fn prepare(&mut self, outbox: &mut Outbox) {
+        let Some(mut tl) = self.timeline.take() else {
+            return;
+        };
+        if self.transport.handled_at != Some(self.transport.position) {
+            self.fire_markers(&mut tl, outbox);
+        }
+        let ended = self.transport.playing && self.transport.position >= tl.timeline.length();
+        self.timeline = Some(tl);
+        if ended {
+            self.halt_and_rewind();
+            outbox.emit(Event::ReachedEnd { player: self.id });
+        }
+    }
+
+    /// Frames until the next marker, or the end of the timeline (at least 1
+    /// after [`Player::prepare`]).
+    fn frames_to_next_marker(&self) -> Samples {
+        let Some(tl) = self.timeline.as_deref() else {
+            return Samples::MAX;
+        };
+        let pos = self.transport.position;
+        let next = tl
+            .timeline
+            .next_marker_after(pos)
+            .unwrap_or(tl.timeline.length());
+        next.saturating_sub(pos).max(1)
+    }
+
+    /// A `Start` marker elsewhere fired this player. Returns whether it
+    /// (re)started, rather than being released from a vamp.
+    fn trigger(&mut self, fade_in: Samples, outbox: &mut Outbox) -> bool {
+        if self.timeline.is_none() {
+            return false;
+        }
+        if self.transport.playing && self.holding() {
+            self.released = true;
+            return false;
+        }
+        if fade_in > 0 {
+            let target = self.gain.target;
+            self.gain.jump(0.0);
+            self.gain
+                .set_over(target, u32::try_from(fade_in).unwrap_or(u32::MAX));
+        }
+        if self.transport.playing {
+            self.restart(outbox);
+        } else {
+            self.halt_and_rewind();
+            self.play(outbox);
+        }
+        true
     }
 
     /// Playing, not yet released, with an "until released" loop at or
@@ -347,6 +443,7 @@ impl Player {
         self.fade_out = None;
         self.crossfade = None;
         self.released = false;
+        self.level.jump(1.0);
         if let Some(tl) = self.timeline.as_deref_mut() {
             tl.reset_loops();
         }
@@ -478,6 +575,22 @@ impl Player {
                     return MarkerFlow::Changed;
                 }
                 MarkerAction::FadeOut { length } => self.start_fade_out(length),
+                MarkerAction::Start { .. } | MarkerAction::StopPlayer { .. } => {
+                    outbox.request(Request {
+                        by: self.id,
+                        action,
+                    });
+                }
+                MarkerAction::Level { gain, length } => {
+                    let gain = if gain.is_finite() {
+                        gain.clamp(0.0, 16.0)
+                    } else {
+                        1.0
+                    };
+                    self.level
+                        .set_over(gain, u32::try_from(length).unwrap_or(u32::MAX));
+                }
+                MarkerAction::Notify => {}
             }
         }
         self.transport.handled_at = Some(pos);
@@ -521,11 +634,23 @@ impl Player {
 
     /// Applies player gain and any fade-out to rendered frames.
     fn apply_gain(&mut self, span: &mut [f32], ch: usize) {
-        if self.gain.is_unity() && self.fade_out.is_none() {
+        let level = !self.level.is_unity();
+        if self.gain.is_unity() && !level && self.fade_out.is_none() {
+            return;
+        }
+        // Steady gain and level, no fade: one constant (vectorises).
+        if self.gain.remaining == 0 && self.level.remaining == 0 && self.fade_out.is_none() {
+            let g = self.gain.current * self.level.current;
+            for s in span.iter_mut() {
+                *s *= g;
+            }
             return;
         }
         for frame in span.chunks_exact_mut(ch) {
             let mut g = self.gain.next();
+            if level {
+                g *= self.level.next();
+            }
             if let Some(f) = self.fade_out.as_mut() {
                 g *= f.remaining as f32 / f.total as f32;
                 f.remaining -= 1;
@@ -533,6 +658,36 @@ impl Player {
             for s in frame {
                 *s *= g;
             }
+        }
+    }
+}
+
+/// Applies the cross-player marker actions collected at one instant, in
+/// the order their markers fired. Targets that do not exist are ignored.
+fn apply_requests(players: &mut [Player], outbox: &mut Outbox) {
+    let mut i = 0;
+    while i < outbox.requests.len() {
+        let Request { by, action } = outbox.requests[i];
+        i += 1;
+        let Some(target) = action.targets_player() else {
+            continue;
+        };
+        let Some(player) = players.get_mut(target.0 as usize) else {
+            continue;
+        };
+        match action {
+            MarkerAction::Start { fade_in, .. } => {
+                if player.trigger(fade_in, outbox) {
+                    outbox.emit(Event::Triggered { player: target, by });
+                }
+            }
+            MarkerAction::StopPlayer { fade: 0, .. } if player.transport.playing => {
+                player.stop(outbox);
+            }
+            MarkerAction::StopPlayer { fade, .. } if player.transport.playing => {
+                player.start_fade_out(fade);
+            }
+            _ => {}
         }
     }
 }
@@ -585,6 +740,8 @@ pub struct Renderer {
     scratch: Box<[f32]>,
     aux: Box<[f32]>,
     master: GainRamp,
+    /// Pre-sized; never grows on the audio thread.
+    requests: Vec<Request>,
 }
 
 impl Renderer {
@@ -615,6 +772,7 @@ impl Renderer {
             scratch: vec![0.0; config.max_block_frames * channels].into_boxed_slice(),
             aux: vec![0.0; config.max_block_frames * channels].into_boxed_slice(),
             master: GainRamp::new(1.0, config.gain_ramp_frames),
+            requests: Vec::with_capacity(MAX_REQUESTS),
         }
     }
 
@@ -625,6 +783,14 @@ impl Renderer {
     /// Renders the next block of audio into `out` (interleaved, length a
     /// multiple of the channel count; any trailing partial frame is
     /// silenced). Real-time safe.
+    ///
+    /// Markers that act on other players (`Start`, `StopPlayer`) must take
+    /// effect at their exact sample for every player. So each block is
+    /// rendered in slices that end at the next marker of any player whose
+    /// timeline has such markers: at each slice boundary those players fire
+    /// their markers first, the collected actions are applied, and only
+    /// then does anyone render on. Without such timelines a block is one
+    /// slice, as before.
     pub fn process(&mut self, out: &mut [f32]) {
         self.drain_commands();
         out.fill(0.0);
@@ -639,24 +805,49 @@ impl Renderer {
             shared,
             master,
             max_block_frames,
+            requests,
             ..
         } = self;
         let mut outbox = Outbox {
             events,
             shared: shared.as_ref(),
+            requests,
         };
 
         for block in out[..usable].chunks_mut(*max_block_frames * ch) {
-            for player in players.iter_mut() {
-                if !player.transport.playing {
-                    continue;
+            let frames = block.len() / ch;
+            let mut t = 0;
+            while t < frames {
+                // Markers at this instant on players that act on others.
+                outbox.requests.clear();
+                for player in players.iter_mut() {
+                    if player.acts_on_others() {
+                        player.prepare(&mut outbox);
+                    }
                 }
-                let scratch = &mut scratch[..block.len()];
-                scratch.fill(0.0);
-                player.render(scratch, &mut aux[..block.len()], ch, &mut outbox);
-                for (o, s) in block.iter_mut().zip(scratch.iter()) {
-                    *o += *s;
+                apply_requests(players, &mut outbox);
+
+                // Render everyone up to the next such marker.
+                let mut end = frames;
+                for player in players.iter() {
+                    if player.acts_on_others() {
+                        let left = (frames - t) as Samples;
+                        end = end.min(t + player.frames_to_next_marker().min(left) as usize);
+                    }
                 }
+                let slice = &mut block[t * ch..end * ch];
+                for player in players.iter_mut() {
+                    if !player.transport.playing {
+                        continue;
+                    }
+                    let scratch = &mut scratch[..slice.len()];
+                    scratch.fill(0.0);
+                    player.render(scratch, &mut aux[..slice.len()], ch, &mut outbox);
+                    for (o, s) in slice.iter_mut().zip(scratch.iter()) {
+                        *o += *s;
+                    }
+                }
+                t = end;
             }
             if !master.is_unity() {
                 for frame in block.chunks_exact_mut(ch) {
@@ -684,6 +875,7 @@ impl Renderer {
             let mut outbox = Outbox {
                 events: &mut self.events,
                 shared: &self.shared,
+                requests: &mut self.requests,
             };
             match command {
                 Command::Load(id, new) => {

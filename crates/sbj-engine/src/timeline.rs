@@ -147,7 +147,7 @@ pub enum LoopCount {
 }
 
 /// What happens when the playhead reaches a marker.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum MarkerAction {
     /// Move the playhead to `to` and keep playing.
     Jump { to: Samples },
@@ -161,10 +161,41 @@ pub enum MarkerAction {
     Stop,
     /// Fade everything out over `length` frames, then stop.
     FadeOut { length: Samples },
+    /// Start another player of the same engine from the top, at exactly
+    /// this sample, fading in over `fade_in` frames. A player that is
+    /// already playing restarts, or leaves its vamp if it is holding one.
+    /// A start or restart is reported with [`crate::Event::Triggered`].
+    Start {
+        player: crate::PlayerId,
+        fade_in: Samples,
+    },
+    /// Stop another player of the same engine at exactly this sample,
+    /// fading out over `fade` frames (0 = the click-free declick stop).
+    StopPlayer {
+        player: crate::PlayerId,
+        fade: Samples,
+    },
+    /// Ramp this player's marker level to `gain` (linear) over `length`
+    /// frames. Multiplies the player gain; back to 1.0 on stop or restart.
+    Level { gain: f32, length: Samples },
+    /// Does nothing in the engine; the control side reacts to the
+    /// [`crate::Event::MarkerReached`] it produces (e.g. to fire a cue on
+    /// another interface).
+    Notify,
+}
+
+impl MarkerAction {
+    /// Acts on another player.
+    pub fn targets_player(&self) -> Option<crate::PlayerId> {
+        match *self {
+            Self::Start { player, .. } | Self::StopPlayer { player, .. } => Some(player),
+            _ => None,
+        }
+    }
 }
 
 /// A point on the timeline that triggers an action.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Marker {
     pub id: MarkerId,
     pub position: Samples,

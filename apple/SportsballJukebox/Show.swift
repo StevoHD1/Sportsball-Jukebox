@@ -309,6 +309,9 @@ struct ClipDoc: Codable, Equatable {
 enum ActionKind: String, Codable, CaseIterable {
     case jump, loop, pause, stop
     case fadeOut = "fade_out"
+    case fire
+    case stopPad = "stop_pad"
+    case volume
 
     var label: String {
         switch self {
@@ -317,10 +320,15 @@ enum ActionKind: String, Codable, CaseIterable {
         case .pause: return "Pause"
         case .stop: return "Stop"
         case .fadeOut: return "Fade Out"
+        case .fire: return "Fire Pad"
+        case .stopPad: return "Stop Pad"
+        case .volume: return "Volume"
         }
     }
 
     var needsTarget: Bool { self == .jump || self == .loop }
+    /// Acts on another pad.
+    var needsPad: Bool { self == .fire || self == .stopPad }
 }
 
 struct TargetDoc: Codable, Equatable {
@@ -335,6 +343,10 @@ struct ActionDoc: Codable, Equatable {
     var seconds: Double?
     /// Loop until the pad is pressed again (a vamp).
     var hold: Bool? = nil
+    /// Fire / Stop Pad: the target pad's slot.
+    var pad: Int? = nil
+    /// Volume: level in dB (0 = as set on the pad).
+    var db: Double? = nil
 }
 
 struct MarkerDoc: Codable, Equatable, Identifiable {

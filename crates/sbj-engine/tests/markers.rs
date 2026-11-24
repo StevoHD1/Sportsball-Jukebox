@@ -782,3 +782,244 @@ fn ramped_gain_takes_the_requested_time() {
     assert!((out[499] - 0.5).abs() < 0.01, "{}", out[499]);
     assert!(out[1000..].iter().all(|&s| s == 0.0));
 }
+
+// ---------------------------------------------------------------------
+// Markers that act on other players, and level markers
+// ---------------------------------------------------------------------
+
+/// `constant(value, frames)` with extra markers.
+fn constant_with(value: f32, frames: usize, markers: &[Marker]) -> Timeline {
+    let mut builder = Timeline::builder(RATE).clip(Clip::new(std::sync::Arc::new(
+        sbj_engine::AudioBuffer::from_interleaved(RATE, 1, vec![value; frames]).unwrap(),
+    )));
+    for m in markers {
+        builder = builder.marker(m.clone());
+    }
+    builder.build().unwrap()
+}
+
+fn start(id: u64, at: u64, player: PlayerId) -> Marker {
+    Marker::new(id, at, MarkerAction::Start { player, fade_in: 0 })
+}
+
+fn runs(out: &[f32], expected: &[(usize, f32)]) -> bool {
+    let mut from = 0;
+    for &(to, value) in expected {
+        if out[from..to].iter().any(|&s| (s - value).abs() > 1e-5) {
+            eprintln!("expected {value} in {from}..{to}: {:?}", &out[from..to]);
+            return false;
+        }
+        from = to;
+    }
+    true
+}
+
+#[test]
+fn start_marker_fires_another_player_on_the_exact_sample() {
+    // The target is rendered before (2) and after (9) the source (5) in
+    // the renderer's order; both must start exactly at frame 37.
+    for target in [PlayerId(2), PlayerId(9)] {
+        for &block in BLOCK_SIZES {
+            let source = PlayerId(5);
+            let (mut c, mut r) = engine(1);
+            c.load(source, constant_with(1.0, 100, &[start(1, 37, target)]))
+                .unwrap();
+            c.load(target, constant(10.0, 20)).unwrap();
+            c.play(source).unwrap();
+            let out = render(&mut r, 120, block);
+            assert!(
+                runs(&out, &[(37, 1.0), (57, 11.0), (100, 1.0), (120, 0.0)]),
+                "target {target:?}, block {block}"
+            );
+            let events = events(&mut c);
+            assert!(events.contains(&Event::Triggered {
+                player: target,
+                by: source
+            }));
+        }
+    }
+}
+
+#[test]
+fn start_markers_chain_sample_exactly() {
+    // A starts B at 10; B starts C 5 frames into B (frame 15).
+    for &block in BLOCK_SIZES {
+        let (a, b, cc) = (PlayerId(4), PlayerId(6), PlayerId(1));
+        let (mut c, mut r) = engine(1);
+        c.load(a, constant_with(1.0, 100, &[start(1, 10, b)]))
+            .unwrap();
+        c.load(b, constant_with(10.0, 50, &[start(1, 5, cc)]))
+            .unwrap();
+        c.load(cc, constant(100.0, 20)).unwrap();
+        c.play(a).unwrap();
+        let out = render(&mut r, 100, block);
+        assert!(
+            runs(
+                &out,
+                &[(10, 1.0), (15, 11.0), (35, 111.0), (60, 11.0), (100, 1.0)]
+            ),
+            "block {block}"
+        );
+    }
+}
+
+#[test]
+fn start_marker_restarts_a_playing_target_and_fades_in() {
+    for &block in BLOCK_SIZES {
+        let (a, b) = (PlayerId(0), PlayerId(1));
+        let (mut c, mut r) = engine(1);
+        c.load(
+            a,
+            constant_with(
+                0.0,
+                100,
+                &[Marker::new(
+                    1,
+                    40,
+                    MarkerAction::Start {
+                        player: b,
+                        fade_in: 10,
+                    },
+                )],
+            ),
+        )
+        .unwrap();
+        c.load(
+            b,
+            Timeline::builder(RATE)
+                .clip(Clip::new(ramp_buffer(200)))
+                .build()
+                .unwrap(),
+        )
+        .unwrap();
+        c.play(b).unwrap();
+        c.play(a).unwrap();
+        let out = render(&mut r, 60, block);
+        assert_eq!(&out[..40], &ramp(0..40)[..], "block {block}");
+        // Restarted at frame 40, fading in over 10 frames.
+        for i in 0..10 {
+            let expected = (i + 1) as f32 * (i + 1) as f32 / 10.0;
+            assert!((out[40 + i] - expected).abs() < 1e-4, "block {block}, {i}");
+        }
+        assert_eq!(&out[50..60], &ramp(10..20)[..], "block {block}");
+    }
+}
+
+#[test]
+fn start_marker_releases_a_vamping_target() {
+    let (a, b) = (PlayerId(0), PlayerId(1));
+    let (mut c, mut r) = engine(1);
+    c.load(a, constant_with(0.0, 1_000, &[start(1, 250, b)]))
+        .unwrap();
+    c.load(b, vamp_timeline()).unwrap();
+    c.play(b).unwrap();
+    render(&mut r, 100, 64);
+    c.play(a).unwrap();
+    render(&mut r, 50, 64);
+    assert!(c.is_holding(b));
+    render(&mut r, 300, 64);
+    assert!(!c.is_holding(b), "released, not restarted");
+    assert!(c.position(b) > 400, "played on past the vamp");
+}
+
+#[test]
+fn stop_player_marker_stops_the_target_exactly() {
+    for &block in BLOCK_SIZES {
+        let (a, b) = (PlayerId(3), PlayerId(2));
+        let stop = |fade| Marker::new(1, 40, MarkerAction::StopPlayer { player: b, fade });
+        // Immediately (declick is off in this engine).
+        let (mut c, mut r) = engine(1);
+        c.load(a, constant_with(1.0, 100, &[stop(0)])).unwrap();
+        c.load(b, constant(10.0, 100)).unwrap();
+        c.play(a).unwrap();
+        c.play(b).unwrap();
+        let out = render(&mut r, 100, block);
+        assert!(runs(&out, &[(40, 11.0), (100, 1.0)]), "block {block}");
+        assert!(!c.is_playing(b));
+
+        // Over 10 frames.
+        let (mut c, mut r) = engine(1);
+        c.load(a, constant_with(1.0, 100, &[stop(10)])).unwrap();
+        c.load(b, constant(10.0, 100)).unwrap();
+        c.play(a).unwrap();
+        c.play(b).unwrap();
+        let out = render(&mut r, 100, block);
+        assert!(runs(&out, &[(40, 11.0)]), "block {block}");
+        for i in 0..10 {
+            let expected = 1.0 + 10.0 * (10 - i) as f32 / 10.0;
+            assert!((out[40 + i] - expected).abs() < 1e-4, "block {block}, {i}");
+        }
+        assert!(runs(&out[50..], &[(50, 1.0)]), "block {block}");
+    }
+}
+
+#[test]
+fn level_markers_ramp_this_player_and_reset_on_restart() {
+    let markers = [
+        Marker::new(
+            1,
+            20,
+            MarkerAction::Level {
+                gain: 0.5,
+                length: 0,
+            },
+        ),
+        Marker::new(
+            2,
+            60,
+            MarkerAction::Level {
+                gain: 1.0,
+                length: 10,
+            },
+        ),
+    ];
+    for &block in BLOCK_SIZES {
+        let (mut c, mut r) = engine(1);
+        c.load(P, constant_with(1.0, 100, &markers)).unwrap();
+        c.play(P).unwrap();
+        let out = render(&mut r, 100, block);
+        assert!(runs(&out, &[(20, 1.0), (60, 0.5)]), "block {block}");
+        for i in 0..10 {
+            let expected = 0.5 + 0.05 * (i + 1) as f32;
+            assert!((out[60 + i] - expected).abs() < 1e-5, "block {block}, {i}");
+        }
+        assert!(runs(&out[70..], &[(30, 1.0)]), "block {block}");
+
+        // Restarting after the first marker starts at full level again.
+        c.play(P).unwrap();
+        render(&mut r, 30, block);
+        c.restart(P).unwrap();
+        assert!(render(&mut r, 10, block).iter().all(|&s| s == 1.0));
+    }
+}
+
+#[test]
+fn notify_markers_only_report() {
+    let (mut c, mut r) = engine(1);
+    c.load(
+        P,
+        constant_with(1.0, 50, &[Marker::new(7, 10, MarkerAction::Notify)]),
+    )
+    .unwrap();
+    c.play(P).unwrap();
+    assert!(render(&mut r, 50, 16).iter().all(|&s| s == 1.0));
+    assert!(events(&mut c).contains(&Event::MarkerReached {
+        player: P,
+        marker: MarkerId(7),
+        position: 10
+    }));
+}
+
+#[test]
+fn start_marker_ignores_missing_and_empty_players() {
+    let (mut c, mut r) = engine(1);
+    let markers = [start(1, 5, PlayerId(1)), start(2, 6, PlayerId(10_000))];
+    c.load(P, constant_with(1.0, 20, &markers)).unwrap();
+    c.play(P).unwrap();
+    assert!(render(&mut r, 20, 7).iter().all(|&s| s == 1.0));
+    assert!(
+        !events(&mut c)
+            .iter()
+            .any(|e| matches!(e, Event::Triggered { .. }))
+    );
+}

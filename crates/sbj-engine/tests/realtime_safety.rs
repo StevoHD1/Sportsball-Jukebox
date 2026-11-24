@@ -130,3 +130,91 @@ fn process_never_allocates_or_frees() {
     assert_eq!(c.leaked_garbage(), 0);
     assert_eq!(c.dropped_events(), 0);
 }
+
+#[test]
+fn cross_player_and_level_markers_never_allocate() {
+    // Pad 0 starts pad 1 and pad 2, stops pad 1, ramps its own level and
+    // reports a Notify marker, on a loop so the paths run many times.
+    let source = Timeline::builder(RATE)
+        .clip(Clip::new(ramp_buffer(4_000)))
+        .marker(Marker::new(
+            1,
+            500,
+            MarkerAction::Start {
+                player: PlayerId(1),
+                fade_in: 100,
+            },
+        ))
+        .marker(Marker::new(
+            2,
+            500,
+            MarkerAction::Start {
+                player: PlayerId(2),
+                fade_in: 0,
+            },
+        ))
+        .marker(Marker::new(
+            3,
+            1_500,
+            MarkerAction::StopPlayer {
+                player: PlayerId(1),
+                fade: 0,
+            },
+        ))
+        .marker(Marker::new(
+            4,
+            2_000,
+            MarkerAction::StopPlayer {
+                player: PlayerId(2),
+                fade: 300,
+            },
+        ))
+        .marker(Marker::new(
+            5,
+            2_500,
+            MarkerAction::Level {
+                gain: 0.25,
+                length: 200,
+            },
+        ))
+        .marker(Marker::new(6, 3_000, MarkerAction::Notify))
+        .marker(Marker::new(
+            7,
+            3_500,
+            MarkerAction::Loop {
+                to: 0,
+                count: LoopCount::Infinite,
+            },
+        ))
+        .build()
+        .unwrap();
+    let target = Timeline::builder(RATE)
+        .clip(Clip::new(ramp_buffer(3_000)))
+        .marker(Marker::new(
+            1,
+            700,
+            MarkerAction::Start {
+                player: PlayerId(3),
+                fade_in: 0,
+            },
+        ))
+        .build()
+        .unwrap();
+
+    let mut config = sbj_engine::EngineConfig::new(RATE, 2);
+    config.declick_frames = 64;
+    let (mut c, mut r) = sbj_engine::Engine::create(config).unwrap();
+    c.load(P, source).unwrap();
+    c.load(PlayerId(1), target.clone()).unwrap();
+    c.load(PlayerId(2), target.clone()).unwrap();
+    c.load(PlayerId(3), target).unwrap();
+    c.play(P).unwrap();
+    let mut buf = vec![0.0f32; 2048 * 2];
+    for i in 0..300 {
+        let frames = [256, 2048, 1, 333, 64][i % 5];
+        guarded_process(&mut r, &mut buf[..frames * 2]);
+        while c.poll_event().is_some() {}
+    }
+    assert_eq!(VIOLATIONS.load(Ordering::SeqCst), 0);
+    assert_eq!(c.dropped_events(), 0);
+}

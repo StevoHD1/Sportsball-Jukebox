@@ -44,6 +44,8 @@ cat > "$demo/Demo.sbjshow" <<JSON
         "action": {"kind": "jump", "to": {"time": 4.0}}},
        {"id": 2, "name": "Vamp", "time": 12.0,
         "action": {"kind": "loop", "to": {"marker": 1}, "hold": true}},
+       {"id": 4, "name": "Horn", "time": 8.0,
+        "action": {"kind": "fire", "pad": 1}},
        {"id": 3, "name": "Out", "time": 13.5,
         "action": {"kind": "fade_out", "seconds": 1.5}}]},
     {"slot": 3, "title": "Crowd Build", "hotkey": "4", "color": "teal", "loop": true,

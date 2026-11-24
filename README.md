@@ -5,12 +5,13 @@ as a native macOS app. Inspired by Sports Sounds Pro, it adds
 sample-accurate timeline markers with actions (loop, jump, pause, fade) and
 support for several audio interfaces at once.
 
-**Status:** Phase 8, awaiting testing on a Mac. A Mac app with:
+**Status:** Phase 9, awaiting testing on a Mac. A Mac app with:
 - a configurable pad grid with hotkeys and colours;
 - show files that autosave;
 - several audio interfaces at once, with automatic failover to a backup;
 - a pad editor with a waveform timeline and markers that jump, loop,
-  pause, stop or fade, with click-free crossfades at every jump;
+  pause, stop, fade, change the volume, or fire and stop other pads at the
+  exact sample, with click-free crossfades at every jump;
 - banks of pads, MIDI triggers with learn, OSC network control (and so
   Stream Deck), and a pre-game check;
 - vamps, exclusive groups, ducking, playlists with crossfades, and

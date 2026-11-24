@@ -570,6 +570,9 @@ private struct MarkerFlag: View {
         case .pause: return "pause.fill"
         case .stop: return "stop.fill"
         case .fadeOut: return "speaker.wave.1"
+        case .fire: return "bolt.fill"
+        case .stopPad: return "stop.circle"
+        case .volume: return "slider.horizontal.3"
         }
     }
 }
@@ -825,6 +828,7 @@ private struct ClipInspector: View {
 }
 
 private struct MarkerInspector: View {
+    @EnvironmentObject private var model: AppModel
     @Binding var draft: CueDoc
     let id: UInt64
     let onRemove: () -> Void
@@ -884,9 +888,92 @@ private struct MarkerInspector: View {
             }
         case .fadeOut:
             SecondsField(label: "Fade length", value: fadeSeconds)
+        case .fire, .stopPad:
+            HStack(spacing: 18) {
+                Picker("Pad", selection: actionField(\.pad, nil)) {
+                    Text("Choose a pad…").tag(Int?.none)
+                    ForEach(otherPads, id: \.slot) { cue in
+                        Text(padLabel(cue)).tag(Int?.some(cue.slot))
+                    }
+                }
+                .frame(width: 320)
+                if kind.wrappedValue == .stopPad {
+                    Toggle("Use the pad's own fade-out", isOn: usePadFade)
+                    if !usePadFade.wrappedValue {
+                        SecondsField(label: "Fade", value: stopSeconds)
+                    }
+                }
+                if let note = padNote {
+                    Label(note, systemImage: "info.circle")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        case .volume:
+            HStack(spacing: 18) {
+                Text("Level")
+                Slider(value: db, in: -40...6, step: 1)
+                    .frame(width: 200)
+                Text(db.wrappedValue <= -40 ? "Silent" : String(format: "%+.0f dB", db.wrappedValue))
+                    .monospacedDigit()
+                    .frame(width: 60, alignment: .leading)
+                SecondsField(label: "Over", value: volumeSeconds)
+            }
         case .pause, .stop:
             EmptyView()
         }
+    }
+
+    /// Pads a marker can act on: every other assigned pad.
+    private var otherPads: [CueDoc] {
+        model.show.cues.filter { $0.slot != draft.slot }.sorted { $0.slot < $1.slot }
+    }
+
+    private func padLabel(_ cue: CueDoc) -> String {
+        let slots = max(model.show.slots, 1)
+        let title = cue.title.isEmpty ? "Pad \(cue.slot % slots + 1)" : cue.title
+        guard model.show.banks.count > 1 else { return title }
+        let bank = cue.slot / slots
+        let name = model.show.banks.indices.contains(bank) ? model.show.banks[bank] : "Bank \(bank + 1)"
+        return "\(name) · \(title)"
+    }
+
+    /// Says when the chosen pad cannot be hit at the exact sample.
+    private var padNote: String? {
+        guard let slot = actionField(\.pad, nil).wrappedValue, let target = model.show.cue(at: slot) else {
+            return nil
+        }
+        if target.playlist != nil { return "Playlist: acts within about 30 ms" }
+        if target.output != draft.output { return "Another output: acts within about 30 ms" }
+        return "Same output: sample-exact"
+    }
+
+    private var usePadFade: Binding<Bool> {
+        Binding(
+            get: { actionField(\.seconds, nil).wrappedValue == nil },
+            set: { actionField(\.seconds, nil).wrappedValue = $0 ? nil : 0.5 }
+        )
+    }
+
+    private var stopSeconds: Binding<Double> {
+        Binding(
+            get: { actionField(\.seconds, nil).wrappedValue ?? 0.5 },
+            set: { actionField(\.seconds, nil).wrappedValue = max($0, 0) }
+        )
+    }
+
+    private var db: Binding<Double> {
+        Binding(
+            get: { actionField(\.db, nil).wrappedValue ?? 0 },
+            set: { actionField(\.db, nil).wrappedValue = $0 <= -40 ? -96 : $0 }
+        )
+    }
+
+    private var volumeSeconds: Binding<Double> {
+        Binding(
+            get: { actionField(\.seconds, nil).wrappedValue ?? 0 },
+            set: { actionField(\.seconds, nil).wrappedValue = max($0, 0) }
+        )
     }
 
     private var explanation: String {
@@ -901,6 +988,9 @@ private struct MarkerInspector: View {
         case .pause: return "Playback pauses here. Play from the editor or fire the pad to restart."
         case .stop: return "Playback stops here and returns to the start."
         case .fadeOut: return "Everything on this pad fades to silence, then stops."
+        case .fire: return "Fires the chosen pad at this point, as if it were pressed (with its fade-in, group and ducking; a vamping pad goes). Use it to stack a horn on a beat or chain sounds."
+        case .stopPad: return "Stops the chosen pad at this point, e.g. ending a crowd loop when the song kicks in."
+        case .volume: return "Changes this pad's volume from here, e.g. down under an announcement, then add another Volume marker at 0 dB to bring it back. Each press starts at full volume."
         }
     }
 
@@ -932,6 +1022,15 @@ private struct MarkerInspector: View {
                 if kind == .fadeOut, draft.markers[i].action.seconds == nil {
                     draft.markers[i].action.seconds = 2
                 }
+                // Clear fields the new kind does not use, so the file stays tidy.
+                if !kind.needsPad { draft.markers[i].action.pad = nil }
+                if kind == .volume {
+                    draft.markers[i].action.db = draft.markers[i].action.db ?? -12
+                    draft.markers[i].action.seconds = draft.markers[i].action.seconds ?? 0.5
+                } else {
+                    draft.markers[i].action.db = nil
+                }
+                if kind == .fire { draft.markers[i].action.seconds = nil }
             }
         )
     }

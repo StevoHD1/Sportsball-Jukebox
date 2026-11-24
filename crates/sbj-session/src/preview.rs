@@ -88,7 +88,8 @@ impl<B: AudioBackend> Session<B> {
             }
             None => {
                 let audio = self.audio_at_rate(&cue, rate);
-                show::cue_timeline(&cue, rate, &audio).0
+                // Markers never act on other pads from the preview player.
+                show::cue_timeline(&cue, rate, &audio, &|_| show::PadTarget::Elsewhere).0
             }
         };
 
