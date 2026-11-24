@@ -1,6 +1,6 @@
 # Sportsball Jukebox: Architecture
 
-Status: Phase 2 (show building). Last updated 2026-11-24.
+Status: Phase 3 (live operation and polish). Last updated 2026-11-24.
 
 ## Goals, in priority order
 
@@ -169,6 +169,19 @@ frame or fires the markers at the current position. Rule 3 means it cannot
 fire the same position twice without advancing. A `process` call therefore
 always finishes, even for a jump that targets itself.
 
+### Click-free edits (declick)
+
+Cutting from one point in a sound to another produces a click. Whenever
+the playhead jumps **while audible** (a marker jump or loop, a retrigger,
+a seek), the player renders a short linear crossfade from where it was to
+where it lands. The outgoing audio continues for `declick_frames` (3 ms
+by default) while the new audio fades in. An operator **Stop** fades out
+over the same length instead of cutting. Marker Pause and Stop actions
+still cut exactly at the marker; use a Fade Out marker before them for a
+soft ending. The crossfade uses a second preallocated scratch buffer, so
+it keeps the no-allocation guarantee, and tests check it sample by
+sample.
+
 ### Planned marker actions
 
 - Trigger another cue or timeline, possibly on another interface.
@@ -245,6 +258,38 @@ marshalling.
 - **No disk I/O at fire time**: all audio for a show is decoded into memory
   at load time.
 
+## Banks and external control
+
+**Banks** are pages of pads. A cue's `slot` is `bank * slots + pad`, every
+output's engine has a player for every slot (up to 512), and only the
+visible bank's pads are drawn. That's why keyboard shortcuts apply to
+the bank shown. Resizing banks renumbers cues so each keeps its bank and
+pad.
+
+**MIDI and OSC** (`crates/sbj-control`) run on their own threads (CoreMIDI's,
+and a UDP thread). They call `Session::handle_control` directly under the
+session lock, which avoids the UI's ~30 ms poll interval. Lock order is
+always listeners, then session: tearing down a MIDI connection waits for
+in-flight callbacks, which hold the session lock. MIDI learn assigns the
+next MIDI message to a pad or a show-wide control (Stop All, next/previous
+bank). See `docs/control.md` for the OSC address space and Stream Deck
+setup.
+
+**Pre-game check** (`Session::preflight`): output devices, backups, glitch
+counts, per-pad problems, pads that can't play, duplicate keys (per bank)
+and MIDI triggers, and memory used by decoded audio. Each item is an
+error, warning or info.
+
+## Performance
+
+`cargo run --release -p sbj-engine --example bench` renders 30 s in
+128-frame blocks (a 2.7 ms deadline) with 1–128 players running at once,
+each looping with a marker. It reports the average and worst time per
+block as a share of the deadline. In a shared Linux container: 64 players
+average about 2% of the deadline, 128 about 5%. The worst-case blocks
+there are dominated by container scheduling noise. CI also runs the
+benchmark on macOS.
+
 ## Testing strategy
 
 | Layer | How | Where |
@@ -304,7 +349,20 @@ CI.
 - Configurable hotkeys and colours, drag pads to rearrange, grid size.
 - Engine fix: a gain set while a player is stopped applies instantly.
 
-**Phase 3: Live operation and polish**
-MIDI/OSC/Stream Deck triggers, hot-cue banks, pre-flight checks,
-crossfades on jumps, accessibility, performance profiling, signing and
-notarization.
+**Phase 3: Live operation and polish (built; awaiting Mac testing)**
+- Declick crossfades on jumps, loops, retriggers and seeks; soft operator
+  stop.
+- Banks of pads (⌘1–9, tabs, MIDI, OSC).
+- MIDI triggers with learn; show-wide MIDI Stop All and bank switching.
+- OSC control (also the Stream Deck route).
+- Pre-game check.
+- VoiceOver labels on pads and controls.
+- Engine benchmark; screenshot mode for docs.
+- Signing and notarization documented (`docs/releasing.md`) for when there
+  is an Apple Developer account.
+
+**Next candidates**
+- Hot cues: firing one pad ducks or stops others (exclusive groups).
+- Per-output channel routing (e.g. pads to outputs 3/4 of an interface).
+- "Armed" loops that exit at the next bar when the operator presses go.
+- Signed releases once there is a Developer account.

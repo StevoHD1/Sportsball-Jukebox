@@ -109,6 +109,26 @@ built-in speakers or headphones)
       pads say "Not ready", the app keeps running; plug it back in and it
       recovers by itself.
 
+**Phase 3: live operation**
+- [ ] Loop markers and retriggering a playing pad sound smooth, with no
+      click at the jump.
+- [ ] Show → Show Settings: add a second bank. Switch with the tabs and
+      ⌘1/⌘2; each bank's keys fire only its own pads.
+- [ ] Plug in any MIDI controller. Show → MIDI & OSC shows it. Right-click
+      a pad → Learn MIDI Trigger → hit a pad on the controller: the pad
+      gets a 🎹 badge and that control now fires it. The bottom bar shows
+      what each message did.
+- [ ] Learn Stop All and Next Bank to controller buttons; test them.
+- [ ] Turn on OSC (port 53100). From another device on the network (a
+      phone with an OSC app, or `oscsend <ip> 53100 /sbj/fire/1`), fire
+      pads and switch banks.
+- [ ] Stream Deck (if you have one): set a button to send OSC
+      `/sbj/title` with a pad name (see `docs/control.md`).
+- [ ] Show → Pre-game Check: unplug a device or rename an audio file and
+      check again; the problem is listed in red.
+- [ ] Turn on VoiceOver (⌘F5) and move over the pads: each reads its
+      title, state and key.
+
 **Stress**
 - [ ] Leave a looping cue running for 10+ minutes. The status line should
       not start showing "glitches".

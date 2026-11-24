@@ -378,6 +378,7 @@ fn mono_clips_feed_all_channels_and_stereo_maps_by_channel() {
 #[test]
 fn master_gain_is_smoothed() {
     let mut config = sbj_engine::EngineConfig::new(RATE, 1);
+    config.declick_frames = 0;
     config.gain_ramp_frames = 10;
     let (mut c, mut r) = sbj_engine::Engine::create(config).unwrap();
     let t = Timeline::builder(RATE)
@@ -512,6 +513,7 @@ fn rejects_unknown_player() {
 #[test]
 fn device_blocks_larger_than_the_mix_block_are_split() {
     let mut config = sbj_engine::EngineConfig::new(RATE, 2);
+    config.declick_frames = 0;
     config.max_block_frames = 16;
     config.gain_ramp_frames = 0;
     let (mut c, mut r) = sbj_engine::Engine::create(config).unwrap();
@@ -532,6 +534,7 @@ fn device_blocks_larger_than_the_mix_block_are_split() {
 #[test]
 fn gain_set_while_stopped_applies_instantly_but_ramps_while_playing() {
     let mut config = sbj_engine::EngineConfig::new(RATE, 1);
+    config.declick_frames = 0;
     config.gain_ramp_frames = 100;
     let (mut c, mut r) = sbj_engine::Engine::create(config).unwrap();
     c.load(P, constant(1.0, 10_000)).unwrap();
@@ -544,4 +547,103 @@ fn gain_set_while_stopped_applies_instantly_but_ramps_while_playing() {
     let out = render(&mut r, 200, 50);
     assert!(out[0] > 0.49 && out[0] < 0.5, "smoothed while audible");
     assert!(out[100..].iter().all(|&s| s == 0.0));
+}
+
+// ---------------------------------------------------------------------
+// Declick crossfades
+// ---------------------------------------------------------------------
+
+const DECLICK: u32 = 10;
+
+fn declick_engine() -> (sbj_engine::Controller, sbj_engine::Renderer) {
+    let mut config = sbj_engine::EngineConfig::new(RATE, 1);
+    config.gain_ramp_frames = 0;
+    config.declick_frames = DECLICK;
+    sbj_engine::Engine::create(config).unwrap()
+}
+
+/// Expected blend of new frame values `new` fading in over old `old`.
+fn blend(new: &[f32], old: &[f32]) -> Vec<f32> {
+    new.iter()
+        .zip(old)
+        .enumerate()
+        .map(|(f, (n, o))| {
+            let k = f as f32 / DECLICK as f32;
+            n * k + o * (1.0 - k)
+        })
+        .collect()
+}
+
+fn close(a: &[f32], b: &[f32]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-3)
+}
+
+#[test]
+fn jumps_crossfade_instead_of_clicking() {
+    let t = Timeline::builder(RATE)
+        .clip(Clip::new(ramp_buffer(1000)))
+        .marker(Marker::new(1, 300, MarkerAction::Jump { to: 700 }))
+        .build()
+        .unwrap();
+    for &block in BLOCK_SIZES {
+        let (mut c, mut r) = declick_engine();
+        c.load(P, t.clone()).unwrap();
+        c.play(P).unwrap();
+        let out = render(&mut r, 400, block);
+        assert_eq!(&out[..300], ramp(0..300).as_slice(), "block {block}");
+        // The old audio (300..) fades out as the new (700..) fades in.
+        let expected = blend(&ramp(700..710), &ramp(300..310));
+        assert!(
+            close(&out[300..310], &expected),
+            "block {block}: {:?}",
+            &out[300..310]
+        );
+        assert_eq!(&out[310..400], ramp(710..800).as_slice(), "block {block}");
+    }
+}
+
+#[test]
+fn retrigger_while_playing_crossfades() {
+    let (mut c, mut r) = declick_engine();
+    c.load(
+        P,
+        Timeline::builder(RATE)
+            .clip(Clip::new(ramp_buffer(1000)))
+            .build()
+            .unwrap(),
+    )
+    .unwrap();
+    c.play(P).unwrap();
+    render(&mut r, 500, 64);
+    c.restart(P).unwrap();
+    let out = render(&mut r, 20, 7);
+    assert!(close(&out[..10], &blend(&ramp(0..10), &ramp(500..510))));
+    assert_eq!(&out[10..], ramp(10..20).as_slice());
+}
+
+#[test]
+fn operator_stop_fades_briefly_then_stops() {
+    let (mut c, mut r) = declick_engine();
+    c.load(P, constant(1.0, 1000)).unwrap();
+    c.play(P).unwrap();
+    render(&mut r, 100, 64);
+    c.stop(P).unwrap();
+    let out = render(&mut r, 50, 50);
+    assert!((out[0] - 1.0).abs() < 1e-6);
+    assert!(out[..DECLICK as usize].windows(2).all(|w| w[1] < w[0]));
+    assert!(out[DECLICK as usize..].iter().all(|&s| s == 0.0));
+    assert!(!c.is_playing(P));
+    assert_eq!(c.position(P), 0);
+}
+
+#[test]
+fn stopping_a_paused_player_is_immediate() {
+    let (mut c, mut r) = declick_engine();
+    c.load(P, constant(1.0, 1000)).unwrap();
+    c.play(P).unwrap();
+    render(&mut r, 100, 64);
+    c.pause(P).unwrap();
+    c.stop(P).unwrap();
+    render(&mut r, 1, 1);
+    assert_eq!(c.position(P), 0);
 }

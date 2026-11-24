@@ -144,10 +144,49 @@ final class EngineSession: @unchecked Sendable {
         }
     }
 
-    func setShowSettings(name: String, slots: Int, columns: Int) throws {
-        try Engine.check(sbj_session_set_show_settings(
-            handle, name, UInt32(clamping: slots), UInt32(clamping: columns)
-        ))
+    func setShowSettings(name: String, slots: Int, columns: Int, banks: [String]) throws {
+        struct Settings: Encodable {
+            let name: String
+            let slots: Int
+            let columns: Int
+            let banks: [String]
+        }
+        let json = try ShowDoc.encode(Settings(name: name, slots: slots, columns: columns, banks: banks))
+        try Engine.check(sbj_session_set_show_settings_json(handle, json))
+    }
+
+    func setBank(_ bank: Int) throws {
+        try Engine.check(sbj_session_set_bank(handle, UInt32(clamping: bank)))
+    }
+
+    // MARK: External control
+
+    func enableMIDI(_ enabled: Bool) throws {
+        try Engine.check(sbj_session_enable_midi(handle, enabled))
+    }
+
+    /// 0 turns OSC off.
+    func setOSCPort(_ port: Int) throws {
+        try Engine.check(sbj_session_set_osc_port(handle, UInt16(clamping: port)))
+    }
+
+    /// Learns the next MIDI message for a target ("cue:<slot>",
+    /// "stop_all", "next_bank", "prev_bank"); nil cancels.
+    func learnMIDI(target: String?) throws {
+        if let target {
+            try Engine.check(sbj_session_learn_midi(handle, target))
+        } else {
+            try Engine.check(sbj_session_learn_midi(handle, nil))
+        }
+    }
+
+    func clearMIDI(target: String) throws {
+        try Engine.check(sbj_session_clear_midi(handle, target))
+    }
+
+    func preflight() -> PreflightReport? {
+        guard let json = Engine.take(sbj_session_preflight_json(handle)) else { return nil }
+        return try? PreflightReport.decode(json)
     }
 
     func setOutputs(_ outputs: [OutputDoc]) throws {

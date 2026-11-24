@@ -19,6 +19,7 @@ pub fn two_devices() -> OfflineBackend {
 
 pub fn session(backend: &OfflineBackend) -> Session<OfflineBackend> {
     let mut s = Session::new(backend.clone());
+    s.set_declick(0.0); // exact-sample assertions
     s.open_outputs();
     s
 }

@@ -199,6 +199,8 @@ private struct EditorHeader: View {
 
             Toggle("Loop", isOn: $draft.loop)
 
+            MidiField(trigger: $draft.midi, slot: draft.slot)
+
             Picker("Colour", selection: color) {
                 ForEach(PadColor.allCases, id: \.self) { c in
                     Text(c.rawValue.capitalized).tag(c.rawValue)
@@ -902,5 +904,35 @@ private struct MarkerInspector: View {
             get: { actionField(\.seconds, nil).wrappedValue ?? 2 },
             set: { actionField(\.seconds, nil).wrappedValue = max($0, 0) }
         )
+    }
+}
+
+/// The pad's MIDI trigger, with Learn (live, applies immediately) and
+/// Clear (part of the draft).
+private struct MidiField: View {
+    @EnvironmentObject private var model: AppModel
+    @Binding var trigger: MidiTrigger?
+    let slot: Int
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "pianokeys")
+            if model.learningTarget == "cue:\(slot)" {
+                Text("Press a MIDI control…").foregroundStyle(.orange)
+                Button("Cancel") { model.cancelLearn() }
+            } else {
+                Text(trigger?.label ?? "No MIDI")
+                    .foregroundStyle(trigger == nil ? Color.secondary : Color.primary)
+                Button("Learn") { model.learnMIDI("cue:\(slot)") }
+                    .help("Press a MIDI key or pad to fire this pad with it")
+                if trigger != nil {
+                    Button("Clear") { trigger = nil }
+                }
+            }
+        }
+        // A learn completes on the engine side; pick up the result.
+        .onChange(of: model.show.cue(at: slot)?.midi) { _, learned in
+            if let learned { trigger = learned }
+        }
     }
 }

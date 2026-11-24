@@ -29,9 +29,15 @@ use sbj_engine::{
 };
 use sbj_media::MediaError;
 
+pub mod control;
+mod preflight;
+
+pub use control::{ControlMessage, LearnTarget, MidiMessage};
+pub use preflight::{Check, CheckLevel, Preflight};
 pub use show::{
-    ActionDoc, ActionKind, ClipDoc, CueDoc, CueProblem, CurveDoc, DeviceRef, MAX_SLOTS, MarkerDoc,
-    OutputDoc, Show, ShowError, TargetDoc,
+    ActionDoc, ActionKind, ClipDoc, ControlsDoc, CueDoc, CueProblem, CurveDoc, DeviceRef,
+    MAX_PADS_PER_BANK, MAX_SLOTS, MarkerDoc, MidiKind, MidiTrigger, OutputDoc, Show, ShowError,
+    TargetDoc,
 };
 
 /// How often to retry an output whose devices are all unavailable.
@@ -122,6 +128,15 @@ impl Sound {
 
     pub fn channels(&self) -> u16 {
         self.original.channels()
+    }
+
+    /// Memory used by this sound's decoded audio, in bytes.
+    pub fn memory_bytes(&self) -> u64 {
+        let samples: usize = std::iter::once(&self.original)
+            .chain(self.by_rate.values())
+            .map(|b| b.data().len())
+            .sum();
+        (samples * std::mem::size_of::<f32>()) as u64
     }
 
     pub fn original(&self) -> &Arc<AudioBuffer> {
@@ -295,6 +310,11 @@ pub struct Session<B: AudioBackend> {
     notices: Vec<String>,
     master_gain: f32,
     retry_interval: Duration,
+    /// Override for the engine's declick length (tests use 0).
+    declick_seconds: Option<f64>,
+    current_bank: u32,
+    learning: Option<LearnTarget>,
+    last_control: Option<String>,
 }
 
 impl<B: AudioBackend> Session<B> {
@@ -314,7 +334,17 @@ impl<B: AudioBackend> Session<B> {
             notices: Vec::new(),
             master_gain: 1.0,
             retry_interval: DEFAULT_RETRY_INTERVAL,
+            declick_seconds: None,
+            current_bank: 0,
+            learning: None,
+            last_control: None,
         }
+    }
+
+    /// Overrides the length of the click-removing crossfades and stop
+    /// fades (0 = hard cuts). Takes effect when outputs are next opened.
+    pub fn set_declick(&mut self, seconds: f64) {
+        self.declick_seconds = Some(seconds.max(0.0));
     }
 
     /// How often to retry an output whose devices are all unavailable.
@@ -355,6 +385,8 @@ impl<B: AudioBackend> Session<B> {
         self.add_decoded(decoded);
         self.show = show;
         self.show_path = path;
+        self.current_bank = 0;
+        self.learning = None;
         self.dirty = false;
         self.outputs = (0..self.show.outputs.len())
             .map(|_| OutputRuntime::default())
@@ -380,26 +412,86 @@ impl<B: AudioBackend> Session<B> {
             .map(Path::to_path_buf)
     }
 
-    /// Renames the show and sets the grid size. Shrinking the grid is
-    /// refused while cues occupy the removed pads.
-    pub fn set_show_settings(&mut self, name: &str, slots: u32, columns: u32) -> Result<()> {
-        if slots == 0 || slots > MAX_SLOTS {
-            return Err(SessionError::Show(ShowError::Invalid(format!(
-                "pad count must be 1-{MAX_SLOTS}"
-            ))));
+    /// Renames the show and sets the grid: pads per bank, columns and bank
+    /// names. Cues keep their position within their bank; shrinking is
+    /// refused while cues occupy pads or banks that would be removed.
+    pub fn set_show_settings(
+        &mut self,
+        name: &str,
+        slots: u32,
+        columns: u32,
+        banks: Vec<String>,
+    ) -> Result<()> {
+        let invalid = |m: String| Err(SessionError::Show(ShowError::Invalid(m)));
+        if slots == 0 || slots > MAX_PADS_PER_BANK {
+            return invalid(format!("pads per bank must be 1-{MAX_PADS_PER_BANK}"));
         }
-        if let Some(cue) = self.show.cues.iter().find(|c| c.slot >= slots) {
-            return Err(SessionError::Show(ShowError::Invalid(format!(
-                "pad {} (\"{}\") is still in use",
-                cue.slot + 1,
-                cue.title
-            ))));
+        if banks.is_empty() || slots * banks.len() as u32 > MAX_SLOTS {
+            return invalid(format!(
+                "at least one bank, and at most {MAX_SLOTS} pads in total"
+            ));
+        }
+        let old_slots = self.show.slots;
+        for cue in &self.show.cues {
+            let (bank, pad) = (cue.slot / old_slots, cue.slot % old_slots);
+            if pad >= slots || bank as usize >= banks.len() {
+                return invalid(format!(
+                    "\"{}\" (bank {}, pad {}) is in a pad that would be removed",
+                    cue.title,
+                    bank + 1,
+                    pad + 1
+                ));
+            }
+        }
+        // Renumber cues if the bank size changed, keeping bank and pad.
+        let mut moved = Vec::new();
+        if slots != old_slots {
+            for cue in &mut self.show.cues {
+                let (bank, pad) = (cue.slot / old_slots, cue.slot % old_slots);
+                moved.push(cue.slot);
+                cue.slot = bank * slots + pad;
+                moved.push(cue.slot);
+            }
         }
         self.show.name = name.to_string();
         self.show.slots = slots;
         self.show.columns = columns.clamp(1, 16);
+        self.show.banks = banks;
+        self.current_bank = self.current_bank.min(self.show.banks.len() as u32 - 1);
         self.dirty = true;
+        moved.sort_unstable();
+        moved.dedup();
+        for slot in moved {
+            self.load_cue(slot);
+        }
         Ok(())
+    }
+
+    // ---- Banks ------------------------------------------------------------
+
+    pub fn current_bank(&self) -> u32 {
+        self.current_bank
+    }
+
+    pub fn set_bank(&mut self, bank: u32) -> Result<()> {
+        if bank as usize >= self.show.banks.len() {
+            return Err(SessionError::Show(ShowError::Invalid(format!(
+                "bank {} does not exist",
+                bank + 1
+            ))));
+        }
+        self.current_bank = bank;
+        Ok(())
+    }
+
+    /// Moves to the next (or previous) bank, wrapping around.
+    pub fn step_bank(&mut self, forward: bool) {
+        let count = self.show.banks.len() as u32;
+        self.current_bank = if forward {
+            (self.current_bank + 1) % count
+        } else {
+            (self.current_bank + count - 1) % count
+        };
     }
 
     // ---- Sounds -------------------------------------------------------
@@ -536,6 +628,9 @@ impl<B: AudioBackend> Session<B> {
     fn start_stream(&self, device: &DeviceInfo) -> Result<Live<B::Stream>> {
         let config = self.backend.preferred_config(&device.id)?;
         let mut engine = EngineConfig::new(config.sample_rate, config.channels);
+        if let Some(seconds) = self.declick_seconds {
+            engine.declick_frames = seconds_to_samples(seconds, config.sample_rate) as u32;
+        }
         engine.players = MAX_SLOTS;
         let (mut controller, mut renderer) = Engine::create(engine)?;
         controller.set_master_gain(self.master_gain)?;
@@ -717,7 +812,7 @@ impl<B: AudioBackend> Session<B> {
     /// uses that is not yet decoded is decoded now (slow); to avoid that,
     /// decode first with [`decode_files`] and [`Session::add_sound`].
     pub fn set_cue(&mut self, cue: CueDoc) -> Result<()> {
-        if cue.slot >= self.show.slots {
+        if cue.slot >= self.show.total_slots() {
             return Err(SessionError::InvalidCue(cue.slot));
         }
         if cue.output as usize >= self.show.outputs.len() {
@@ -748,7 +843,7 @@ impl<B: AudioBackend> Session<B> {
     }
 
     pub fn remove_cue(&mut self, slot: u32) -> Result<()> {
-        if slot >= self.show.slots {
+        if slot >= self.show.total_slots() {
             return Err(SessionError::InvalidCue(slot));
         }
         self.show.cues.retain(|c| c.slot != slot);
@@ -760,7 +855,7 @@ impl<B: AudioBackend> Session<B> {
     /// Moves a cue to another pad, swapping with whatever is there.
     pub fn move_cue(&mut self, from: u32, to: u32) -> Result<()> {
         for s in [from, to] {
-            if s >= self.show.slots {
+            if s >= self.show.total_slots() {
                 return Err(SessionError::InvalidCue(s));
             }
         }
@@ -779,7 +874,7 @@ impl<B: AudioBackend> Session<B> {
     }
 
     fn live_for(&mut self, slot: u32) -> Result<(&mut Live<B::Stream>, LoadedCue)> {
-        if slot >= self.show.slots {
+        if slot >= self.show.total_slots() {
             return Err(SessionError::InvalidCue(slot));
         }
         let loaded = *self.loaded.get(&slot).ok_or(SessionError::NoOutput)?;
@@ -793,7 +888,7 @@ impl<B: AudioBackend> Session<B> {
     /// Plays a cue from the start (restarting it if playing). Firing an
     /// empty pad does nothing.
     pub fn fire_cue(&mut self, slot: u32) -> Result<()> {
-        if slot < self.show.slots && self.show.cue(slot).is_none() {
+        if slot < self.show.total_slots() && self.show.cue(slot).is_none() {
             return Ok(());
         }
         let (live, _) = self.live_for(slot)?;
@@ -806,7 +901,7 @@ impl<B: AudioBackend> Session<B> {
         let (live, _) = self.live_for(slot)?;
         let player = PlayerId(slot);
         let position = seconds_to_samples(seconds, live.config.sample_rate);
-        live.controller.stop(player)?;
+        // Seek crossfades if it is already playing; play starts it if not.
         live.controller.seek(player, position)?;
         live.controller.play(player)?;
         Ok(())
@@ -846,7 +941,7 @@ impl<B: AudioBackend> Session<B> {
     }
 
     pub fn cue_state(&self, slot: u32) -> Result<CueState> {
-        if slot >= self.show.slots {
+        if slot >= self.show.total_slots() {
             return Err(SessionError::InvalidCue(slot));
         }
         let doc = self.show.cue(slot);

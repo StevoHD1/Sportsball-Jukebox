@@ -88,6 +88,15 @@ jobs:
           name: Sportsball-Jukebox-macOS
           path: dist/*.zip
           retention-days: 30
+      - name: Screenshots (demo show, synthesised audio)
+        run: scripts/make-screenshots.sh "apple/build/Build/Products/Release/Sportsball Jukebox.app" screenshots
+      - uses: actions/upload-artifact@v4
+        with:
+          name: screenshots
+          path: screenshots/*.png
+          retention-days: 30
+      - name: Engine benchmark
+        run: cargo run --release -p sbj-engine --example bench
       - uses: actions/upload-artifact@v4
         if: failure()
         with:

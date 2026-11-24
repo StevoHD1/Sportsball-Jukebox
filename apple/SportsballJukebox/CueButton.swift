@@ -40,6 +40,7 @@ struct CueButton: View {
     private var state: CueStatus { model.state(of: slot) }
     private var problems: [String] { model.problems(for: slot) }
     private var isBusy: Bool { model.busySlots.contains(slot) }
+    private var isLearning: Bool { model.learningTarget == "cue:\(slot)" }
 
     var body: some View {
         Button {
@@ -51,7 +52,7 @@ struct CueButton: View {
                 hasProblems: !problems.isEmpty,
                 isBusy: isBusy
             )
-            .overlay(shape.strokeBorder(borderColor, lineWidth: isDropTarget ? 3 : 1))
+            .overlay(shape.strokeBorder(borderColor, lineWidth: isDropTarget || isLearning ? 3 : 1))
             .contentShape(shape)
         }
         .buttonStyle(.plain)
@@ -74,10 +75,29 @@ struct CueButton: View {
             return true
         } isTargeted: { isDropTarget = $0 }
         .help(helpText)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(cue.map { "Pad \($0.title)" } ?? "Empty pad")
+        .accessibilityValue(accessibilityValue)
+        .accessibilityHint(cue == nil ? "Choose a sound" : "Plays the sound from the start")
+        .accessibilityAddTraits(.isButton)
+    }
+
+    private var accessibilityValue: String {
+        guard cue != nil else { return "" }
+        var parts: [String] = []
+        if state.playing {
+            parts.append("Playing, \(formatTime(max(state.duration - state.position, 0))) remaining")
+        } else if !state.ready {
+            parts.append("Not ready")
+        }
+        if let key = cue?.hotkey { parts.append("Key \(key.uppercased())") }
+        if !problems.isEmpty { parts.append("Has problems") }
+        return parts.joined(separator: ", ")
     }
 
     private var borderColor: Color {
         if isDropTarget { return .accentColor }
+        if isLearning { return .orange }
         if !problems.isEmpty { return .orange }
         return state.playing ? .green : Color.secondary.opacity(0.25)
     }
@@ -96,6 +116,13 @@ struct CueButton: View {
                 get: { cue.loop },
                 set: { model.setLoop(slot, $0) }
             ))
+            Divider()
+            Button(cue.midi == nil ? "Learn MIDI Trigger" : "Re-learn MIDI Trigger") {
+                model.learnMIDI("cue:\(slot)")
+            }
+            if let midi = cue.midi {
+                Button("Clear MIDI (\(midi.label))") { model.clearMIDI("cue:\(slot)") }
+            }
             Divider()
             Button("Stop") { model.stop(slot, fade: false) }
             Button("Fade Out") { model.stop(slot, fade: true) }
@@ -162,6 +189,9 @@ private struct PadFace: View {
             }
             if let cue, !cue.markers.isEmpty {
                 Image(systemName: "flag.fill")
+            }
+            if cue?.midi != nil {
+                Image(systemName: "pianokeys")
             }
             if cue?.loop == true {
                 Image(systemName: "repeat")

@@ -155,6 +155,16 @@ impl Outbox<'_> {
     }
 }
 
+/// A short crossfade from where the playhead was to where it jumped, so
+/// jumps, loops, retriggers and seeks do not click.
+#[derive(Clone, Copy)]
+struct Crossfade {
+    /// Position the outgoing audio continues from.
+    from: Samples,
+    remaining: Samples,
+    total: Samples,
+}
+
 /// One timeline with its own transport, gain and fade.
 struct Player {
     id: PlayerId,
@@ -162,16 +172,32 @@ struct Player {
     transport: Transport,
     gain: GainRamp,
     fade_out: Option<FadeOut>,
+    crossfade: Option<Crossfade>,
+    /// Length of declick crossfades and stop fades; 0 disables them.
+    declick: Samples,
 }
 
 impl Player {
-    fn new(id: PlayerId, ramp_frames: u32) -> Self {
+    fn new(id: PlayerId, ramp_frames: u32, declick: Samples) -> Self {
         Self {
             id,
             timeline: None,
             transport: Transport::STOPPED,
             gain: GainRamp::new(1.0, ramp_frames),
             fade_out: None,
+            crossfade: None,
+            declick,
+        }
+    }
+
+    /// Starts a crossfade from the current position if audio is playing.
+    fn begin_crossfade(&mut self) {
+        if self.transport.playing && self.declick > 0 {
+            self.crossfade = Some(Crossfade {
+                from: self.transport.position,
+                remaining: self.declick,
+                total: self.declick,
+            });
         }
     }
 
@@ -198,12 +224,24 @@ impl Player {
         }
     }
 
+    /// Operator stop: a short fade if audible (so it does not click), then
+    /// halt and rewind.
     fn stop(&mut self, out: &mut Outbox) {
+        if self.transport.playing && self.declick > 0 {
+            self.start_fade_out(self.declick);
+        } else {
+            self.finish_stop(out);
+        }
+    }
+
+    /// Halts and rewinds immediately.
+    fn finish_stop(&mut self, out: &mut Outbox) {
         self.halt_and_rewind();
         out.emit(Event::Stopped { player: self.id });
     }
 
     fn seek(&mut self, target: Samples, out: &mut Outbox) {
+        self.begin_crossfade();
         if let Some(tl) = self.timeline.as_deref_mut() {
             let position = target.min(tl.timeline.length());
             tl.reset_loops();
@@ -218,8 +256,17 @@ impl Player {
 
     fn restart(&mut self, out: &mut Outbox) {
         if self.timeline.is_some() {
+            let was_playing = self.transport.playing;
+            let from = self.transport.position;
             self.halt_and_rewind();
             self.play(out);
+            if was_playing && self.declick > 0 {
+                self.crossfade = Some(Crossfade {
+                    from,
+                    remaining: self.declick,
+                    total: self.declick,
+                });
+            }
         }
     }
 
@@ -238,12 +285,14 @@ impl Player {
     fn halt_and_rewind(&mut self) {
         self.transport = Transport::STOPPED;
         self.fade_out = None;
+        self.crossfade = None;
         if let Some(tl) = self.timeline.as_deref_mut() {
             tl.reset_loops();
         }
     }
 
     fn jump(&mut self, to: Samples) {
+        self.begin_crossfade();
         self.transport.position = to;
         // Markers at the landing spot do not fire; this also guarantees a
         // jump can never re-trigger itself without the playhead advancing.
@@ -251,7 +300,8 @@ impl Player {
     }
 
     /// Renders the player into `out` (zeroed, interleaved, `ch` channels).
-    fn render(&mut self, out: &mut [f32], ch: usize, outbox: &mut Outbox) {
+    /// `aux` is scratch space at least as long as `out`.
+    fn render(&mut self, out: &mut [f32], aux: &mut [f32], ch: usize, outbox: &mut Outbox) {
         let frames = out.len() / ch;
         let mut frame = 0;
 
@@ -288,6 +338,7 @@ impl Player {
             if len > 0 {
                 let span = &mut out[frame * ch..(frame + len as usize) * ch];
                 mix_timeline(&tl.timeline, pos, span, ch);
+                self.apply_crossfade(&tl.timeline, span, aux, ch);
                 self.apply_gain(span, ch);
                 self.transport.position = pos + len;
                 self.transport.handled_at = None;
@@ -296,7 +347,7 @@ impl Player {
             self.timeline = Some(tl);
 
             if self.fade_out.is_some_and(|f| f.remaining == 0) {
-                self.stop(outbox);
+                self.finish_stop(outbox);
             }
         }
     }
@@ -363,6 +414,41 @@ impl Player {
         MarkerFlow::Continue
     }
 
+    /// Blends the start of `span` (new position) with audio continuing
+    /// from the pre-jump position, which fades out linearly.
+    fn apply_crossfade(
+        &mut self,
+        timeline: &Timeline,
+        span: &mut [f32],
+        aux: &mut [f32],
+        ch: usize,
+    ) {
+        let Some(x) = self.crossfade.as_mut() else {
+            return;
+        };
+        let frames = (span.len() / ch) as Samples;
+        let k = frames.min(x.remaining);
+        let tail = &mut aux[..k as usize * ch];
+        tail.fill(0.0);
+        mix_timeline(timeline, x.from, tail, ch);
+        let done = x.total - x.remaining;
+        for (f, (new, old)) in span
+            .chunks_exact_mut(ch)
+            .zip(tail.chunks_exact(ch))
+            .enumerate()
+        {
+            let fade_in = (done + f as Samples) as f32 / x.total as f32;
+            for (n, o) in new.iter_mut().zip(old) {
+                *n = *n * fade_in + *o * (1.0 - fade_in);
+            }
+        }
+        x.from += k;
+        x.remaining -= k;
+        if x.remaining == 0 {
+            self.crossfade = None;
+        }
+    }
+
     /// Applies player gain and any fade-out to rendered frames.
     fn apply_gain(&mut self, span: &mut [f32], ch: usize) {
         if self.gain.is_unity() && self.fade_out.is_none() {
@@ -426,6 +512,7 @@ pub struct Renderer {
     shared: Arc<Shared>,
     players: Box<[Player]>,
     scratch: Box<[f32]>,
+    aux: Box<[f32]>,
     master: GainRamp,
 }
 
@@ -446,9 +533,16 @@ impl Renderer {
             garbage,
             shared,
             players: (0..config.players)
-                .map(|i| Player::new(PlayerId(i), config.gain_ramp_frames))
+                .map(|i| {
+                    Player::new(
+                        PlayerId(i),
+                        config.gain_ramp_frames,
+                        Samples::from(config.declick_frames),
+                    )
+                })
                 .collect(),
             scratch: vec![0.0; config.max_block_frames * channels].into_boxed_slice(),
+            aux: vec![0.0; config.max_block_frames * channels].into_boxed_slice(),
             master: GainRamp::new(1.0, config.gain_ramp_frames),
         }
     }
@@ -469,6 +563,7 @@ impl Renderer {
         let Self {
             players,
             scratch,
+            aux,
             events,
             shared,
             master,
@@ -487,7 +582,7 @@ impl Renderer {
                 }
                 let scratch = &mut scratch[..block.len()];
                 scratch.fill(0.0);
-                player.render(scratch, ch, &mut outbox);
+                player.render(scratch, &mut aux[..block.len()], ch, &mut outbox);
                 for (o, s) in block.iter_mut().zip(scratch.iter()) {
                     *o += *s;
                 }

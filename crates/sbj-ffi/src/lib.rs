@@ -21,14 +21,17 @@ use std::cell::RefCell;
 use std::ffi::{CStr, CString, c_char};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use sbj_backend::system::SystemBackend;
 use sbj_backend::{AudioBackend, DeviceInfo};
+use sbj_control::Sink;
+use sbj_control::midi::MidiListener;
+use sbj_control::osc::OscListener;
 use sbj_engine::EngineError;
 use sbj_session::{
-    CueDoc, DecodeReport, OutputDoc, OutputStatus, Session, SessionError, Show, decode_files,
-    waveform,
+    CheckLevel, CueDoc, DecodeReport, LearnTarget, OutputDoc, OutputStatus, Session, SessionError,
+    Show, decode_files, waveform,
 };
 use serde_json::json;
 
@@ -73,18 +76,61 @@ pub struct SbjCueState {
 
 /// Opaque session handle.
 pub struct SbjSession {
+    // Declared first so listener threads stop before anything else drops.
+    control: Mutex<Listeners>,
+    shared: Arc<Shared>,
+}
+
+/// The parts MIDI/OSC listener threads also reach.
+struct Shared {
     session: Mutex<Session<SystemBackend>>,
     /// Snapshot from the last `sbj_session_device_count`, so indices stay
     /// stable while the UI reads them.
     devices: Mutex<Vec<DeviceInfo>>,
 }
 
-impl SbjSession {
+#[derive(Default)]
+struct Listeners {
+    midi: Option<MidiListener>,
+    osc: Option<OscListener>,
+}
+
+impl Shared {
     fn lock(&self) -> MutexGuard<'_, Session<SystemBackend>> {
         // A panic while locked was already reported; the session's state
         // is still consistent (every mutation is a single assignment or an
         // engine command), so keep going rather than failing forever.
         self.session.lock().unwrap_or_else(|e| e.into_inner())
+    }
+}
+
+impl SbjSession {
+    fn lock(&self) -> MutexGuard<'_, Session<SystemBackend>> {
+        self.shared.lock()
+    }
+
+    fn devices(&self) -> MutexGuard<'_, Vec<DeviceInfo>> {
+        self.shared
+            .devices
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn listeners(&self) -> MutexGuard<'_, Listeners> {
+        self.control.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Delivers control messages straight to the session from listener
+    /// threads. Holds only a weak reference so it never keeps a destroyed
+    /// session alive.
+    fn sink(&self) -> Sink {
+        let shared = Arc::downgrade(&self.shared);
+        Arc::new(move |message| {
+            if let Some(shared) = shared.upgrade() {
+                // Never let a panic escape into CoreMIDI's thread.
+                let _ = catch_unwind(AssertUnwindSafe(|| shared.lock().handle_control(message)));
+            }
+        })
     }
 }
 
@@ -238,8 +284,11 @@ pub extern "C" fn sbj_abi_check(device_info_size: usize, cue_state_size: usize) 
 pub extern "C" fn sbj_session_create() -> *mut SbjSession {
     catch_unwind(|| {
         Box::into_raw(Box::new(SbjSession {
-            session: Mutex::new(Session::new(SystemBackend::new())),
-            devices: Mutex::new(Vec::new()),
+            control: Mutex::new(Listeners::default()),
+            shared: Arc::new(Shared {
+                session: Mutex::new(Session::new(SystemBackend::new())),
+                devices: Mutex::new(Vec::new()),
+            }),
         }))
     })
     .unwrap_or(std::ptr::null_mut())
@@ -372,7 +421,7 @@ pub unsafe extern "C" fn sbj_session_device_count(session: *const SbjSession) ->
                 Err(e) => return session_status(Err(e.into())),
             };
             count = devices.len() as u32;
-            *s.devices.lock().unwrap_or_else(|e| e.into_inner()) = devices;
+            *s.devices() = devices;
             SbjStatus::Ok
         })
     };
@@ -394,7 +443,7 @@ pub unsafe extern "C" fn sbj_session_device_info(
     // SAFETY: forwarded caller contract.
     unsafe {
         with_session(session, |s| {
-            let devices = s.devices.lock().unwrap_or_else(|e| e.into_inner());
+            let devices = s.devices();
             let Some(d) = devices.get(index as usize) else {
                 return fail(SbjStatus::InvalidArgument, "device index out of range");
             };
@@ -439,6 +488,15 @@ pub unsafe extern "C" fn sbj_session_status_json(session: *const SbjSession) -> 
     // SAFETY: forwarded caller contract.
     unsafe {
         session_string(session, |s| {
+            // Lock order: listeners, then session (never the reverse; MIDI
+            // callbacks hold the session while listeners are torn down).
+            let (midi_inputs, osc_port) = {
+                let listeners = s.listeners();
+                (
+                    listeners.midi.as_ref().map(|m| m.inputs().to_vec()),
+                    listeners.osc.as_ref().map(OscListener::port),
+                )
+            };
             let mut session = s.lock();
             let outputs: Vec<_> = session
                 .outputs_state()
@@ -466,6 +524,11 @@ pub unsafe extern "C" fn sbj_session_status_json(session: *const SbjSession) -> 
                 .map(|p| json!({"slot": p.slot, "message": p.message}))
                 .collect();
             let status = json!({
+                "bank": session.current_bank(),
+                "learning": session.learning().map(target_name),
+                "last_control": session.last_control(),
+                "midi_inputs": midi_inputs,
+                "osc_port": osc_port,
                 "dirty": session.is_dirty(),
                 "path": session.show_path().map(|p| p.display().to_string()),
                 "outputs": outputs,
@@ -551,26 +614,238 @@ pub unsafe extern "C" fn sbj_session_save_show(
     }
 }
 
-/// Renames the show and sets the grid size.
+/// Sets the show's name and grid from JSON:
+/// `{"name", "slots" (pads per bank), "columns", "banks": [names]}`.
 ///
 /// # Safety
-/// `session` must be null or a live session; `name` a valid string.
+/// `session` must be null or a live session; `json` a valid string.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn sbj_session_set_show_settings(
+pub unsafe extern "C" fn sbj_session_set_show_settings_json(
     session: *const SbjSession,
-    name: *const c_char,
-    slots: u32,
-    columns: u32,
+    json: *const c_char,
 ) -> SbjStatus {
+    #[derive(serde::Deserialize)]
+    struct Settings {
+        name: String,
+        slots: u32,
+        columns: u32,
+        banks: Vec<String>,
+    }
     // SAFETY: forwarded caller contract.
-    let name = match unsafe { required_str(name, "name") } {
-        Ok(n) => n.to_owned(),
+    let settings: Settings = match unsafe { required_str(json, "json") }.and_then(|j| {
+        serde_json::from_str(j)
+            .map_err(|e| fail(SbjStatus::InvalidArgument, format!("bad settings: {e}")))
+    }) {
+        Ok(s) => s,
         Err(status) => return status,
     };
     // SAFETY: forwarded caller contract.
     unsafe {
         with_session(session, |s| {
-            session_status(s.lock().set_show_settings(&name, slots, columns))
+            session_status(s.lock().set_show_settings(
+                &settings.name,
+                settings.slots,
+                settings.columns,
+                settings.banks,
+            ))
+        })
+    }
+}
+
+/// Shows bank `bank` (0-based): hotkeys and OSC pad numbers refer to it.
+///
+/// # Safety
+/// `session` must be null or a live session.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sbj_session_set_bank(session: *const SbjSession, bank: u32) -> SbjStatus {
+    // SAFETY: forwarded caller contract.
+    unsafe { with_session(session, |s| session_status(s.lock().set_bank(bank))) }
+}
+
+// ---------------------------------------------------------------------
+// External control: MIDI, OSC, learn
+// ---------------------------------------------------------------------
+
+/// Turns MIDI input on (listening to every connected MIDI device) or off.
+/// Calling it again with `true` rescans for devices.
+///
+/// # Safety
+/// `session` must be null or a live session.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sbj_session_enable_midi(
+    session: *const SbjSession,
+    enabled: bool,
+) -> SbjStatus {
+    // SAFETY: forwarded caller contract.
+    unsafe {
+        with_session(session, |s| {
+            // Stop the old listener without holding any lock: it waits for
+            // in-flight callbacks, which take the session lock.
+            let old = s.listeners().midi.take();
+            #[allow(clippy::drop_non_drop)] // only the stub (Linux) has no Drop
+            drop(old);
+            if !enabled {
+                return SbjStatus::Ok;
+            }
+            match MidiListener::start(s.sink()) {
+                Ok(midi) => {
+                    s.listeners().midi = Some(midi);
+                    SbjStatus::Ok
+                }
+                Err(e) => fail(SbjStatus::DeviceError, format!("MIDI unavailable: {e}")),
+            }
+        })
+    }
+}
+
+/// Listens for OSC on UDP `port`, or stops listening if `port` is 0.
+///
+/// # Safety
+/// `session` must be null or a live session.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sbj_session_set_osc_port(
+    session: *const SbjSession,
+    port: u16,
+) -> SbjStatus {
+    // SAFETY: forwarded caller contract.
+    unsafe {
+        with_session(session, |s| {
+            // As for MIDI: stop the old listener outside any lock.
+            let old = s.listeners().osc.take();
+            drop(old);
+            if port == 0 {
+                return SbjStatus::Ok;
+            }
+            match OscListener::start(port, s.sink()) {
+                Ok(osc) => {
+                    s.listeners().osc = Some(osc);
+                    SbjStatus::Ok
+                }
+                Err(e) => fail(
+                    SbjStatus::DeviceError,
+                    format!("cannot listen on port {port}: {e}"),
+                ),
+            }
+        })
+    }
+}
+
+fn parse_target(target: &str) -> Option<LearnTarget> {
+    match target {
+        "stop_all" => Some(LearnTarget::StopAll),
+        "next_bank" => Some(LearnTarget::NextBank),
+        "prev_bank" => Some(LearnTarget::PrevBank),
+        other => other
+            .strip_prefix("cue:")
+            .and_then(|n| n.parse().ok())
+            .map(LearnTarget::Cue),
+    }
+}
+
+fn target_name(target: LearnTarget) -> String {
+    match target {
+        LearnTarget::StopAll => "stop_all".into(),
+        LearnTarget::NextBank => "next_bank".into(),
+        LearnTarget::PrevBank => "prev_bank".into(),
+        LearnTarget::Cue(slot) => format!("cue:{slot}"),
+    }
+}
+
+/// Starts MIDI learn: the next MIDI message is assigned to `target`
+/// ("cue:<slot>", "stop_all", "next_bank" or "prev_bank"). Null cancels.
+///
+/// # Safety
+/// `session` must be null or a live session; `target` null or a valid
+/// string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sbj_session_learn_midi(
+    session: *const SbjSession,
+    target: *const c_char,
+) -> SbjStatus {
+    // SAFETY: forwarded caller contract.
+    let target = match unsafe { read_str(target) } {
+        Ok(None) => None,
+        Ok(Some(t)) => match parse_target(t) {
+            Some(t) => Some(t),
+            None => return fail(SbjStatus::InvalidArgument, format!("unknown target {t}")),
+        },
+        Err(status) => return status,
+    };
+    // SAFETY: forwarded caller contract.
+    unsafe {
+        with_session(session, |s| {
+            let mut session = s.lock();
+            match target {
+                Some(t) => session_status(session.start_learning(t)),
+                None => {
+                    session.cancel_learning();
+                    SbjStatus::Ok
+                }
+            }
+        })
+    }
+}
+
+/// Removes the MIDI trigger from `target` (same names as learn).
+///
+/// # Safety
+/// `session` must be null or a live session; `target` a valid string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sbj_session_clear_midi(
+    session: *const SbjSession,
+    target: *const c_char,
+) -> SbjStatus {
+    // SAFETY: forwarded caller contract.
+    let target = match unsafe { required_str(target, "target") } {
+        Ok(t) => match parse_target(t) {
+            Some(t) => t,
+            None => return fail(SbjStatus::InvalidArgument, format!("unknown target {t}")),
+        },
+        Err(status) => return status,
+    };
+    // SAFETY: forwarded caller contract.
+    unsafe {
+        with_session(session, |s| {
+            s.lock().set_control_trigger(target, None);
+            SbjStatus::Ok
+        })
+    }
+}
+
+/// The pre-game check as JSON:
+/// `{"ready": bool, "memory_mb": number,
+///   "checks": [{"level": "ok|info|warning|error", "message"}]}`
+/// (most severe first). Free with `sbj_string_free`.
+///
+/// # Safety
+/// `session` must be null or a live session.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sbj_session_preflight_json(session: *const SbjSession) -> *mut c_char {
+    // SAFETY: forwarded caller contract.
+    unsafe {
+        session_string(session, |s| {
+            let report = s.lock().preflight();
+            let checks: Vec<_> = report
+                .checks
+                .iter()
+                .map(|c| {
+                    json!({
+                        "level": match c.level {
+                            CheckLevel::Ok => "ok",
+                            CheckLevel::Info => "info",
+                            CheckLevel::Warning => "warning",
+                            CheckLevel::Error => "error",
+                        },
+                        "message": c.message,
+                    })
+                })
+                .collect();
+            Ok(json!({
+                "ready": report.ready(),
+                "memory_mb": report.memory_bytes as f64 / (1024.0 * 1024.0),
+                "checks": checks,
+            })
+            .to_string())
         })
     }
 }
@@ -931,6 +1206,50 @@ mod tests {
                 SbjStatus::InvalidArgument,
                 "no file yet"
             );
+            sbj_session_destroy(s);
+        }
+    }
+
+    #[test]
+    fn osc_reaches_the_session() {
+        use std::net::UdpSocket;
+        unsafe {
+            let s = sbj_session_create();
+            let settings = cr#"{"name":"T","slots":4,"columns":4,"banks":["A","B","C"]}"#;
+            assert_eq!(
+                sbj_session_set_show_settings_json(s, settings.as_ptr()),
+                SbjStatus::Ok
+            );
+            // Find a free port, then listen on it.
+            let port = UdpSocket::bind("127.0.0.1:0")
+                .unwrap()
+                .local_addr()
+                .unwrap()
+                .port();
+            assert_eq!(sbj_session_set_osc_port(s, port), SbjStatus::Ok);
+            let status = || -> serde_json::Value {
+                serde_json::from_str(&take(sbj_session_status_json(s))).unwrap()
+            };
+            assert_eq!(status()["osc_port"], port);
+
+            // A hand-encoded OSC message: "/sbj/bank/3" with no arguments.
+            let mut packet = b"/sbj/bank/3\0".to_vec();
+            packet.extend_from_slice(b",\0\0\0");
+            let sender = UdpSocket::bind("127.0.0.1:0").unwrap();
+            sender.send_to(&packet, ("127.0.0.1", port)).unwrap();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+            while status()["bank"] != 2 && std::time::Instant::now() < deadline {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            let st = status();
+            assert_eq!(st["bank"], 2);
+            assert!(st["last_control"].as_str().unwrap().contains("bank 3"));
+
+            assert_eq!(sbj_session_set_osc_port(s, 0), SbjStatus::Ok);
+            assert!(status()["osc_port"].is_null());
+            let preflight: serde_json::Value =
+                serde_json::from_str(&take(sbj_session_preflight_json(s))).unwrap();
+            assert!(preflight["checks"].as_array().is_some());
             sbj_session_destroy(s);
         }
     }

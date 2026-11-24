@@ -99,7 +99,22 @@ int main(void) {
     sbj_string_free(status);
 
     const char *show_path = "sbj_smoke_test.sbjshow";
-    CHECK(sbj_session_set_show_settings(s, "Smoke", 24, 6) == SBJ_STATUS_OK);
+    CHECK(sbj_session_set_show_settings_json(
+              s, "{\"name\":\"Smoke\",\"slots\":12,\"columns\":6,"
+                 "\"banks\":[\"Pregame\",\"Game\"]}") == SBJ_STATUS_OK);
+    CHECK(sbj_session_set_bank(s, 1) == SBJ_STATUS_OK);
+    CHECK(sbj_session_set_bank(s, 2) == SBJ_STATUS_SHOW_ERROR);
+    CHECK(sbj_session_learn_midi(s, "cue:3") == SBJ_STATUS_OK);
+    CHECK(sbj_session_learn_midi(s, NULL) == SBJ_STATUS_OK);
+    CHECK(sbj_session_learn_midi(s, "bogus") == SBJ_STATUS_INVALID_ARGUMENT);
+    CHECK(sbj_session_clear_midi(s, "stop_all") == SBJ_STATUS_OK);
+    CHECK(sbj_session_enable_midi(s, true) == SBJ_STATUS_OK);
+    CHECK(sbj_session_set_osc_port(s, 0) == SBJ_STATUS_OK);
+    char *preflight = sbj_session_preflight_json(s);
+    CHECK(preflight != NULL && strstr(preflight, "\"checks\"") != NULL);
+    printf("preflight: %s\n", preflight);
+    sbj_string_free(preflight);
+    CHECK(sbj_session_enable_midi(s, false) == SBJ_STATUS_OK);
     CHECK(sbj_session_save_show(s, show_path) == SBJ_STATUS_OK);
     CHECK(sbj_session_new_show(s) == SBJ_STATUS_OK);
     CHECK(sbj_session_cue_states(s, 3, 1, states) == SBJ_STATUS_OK && !states[0].assigned);

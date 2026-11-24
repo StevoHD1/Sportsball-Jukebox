@@ -81,7 +81,9 @@ fn process_never_allocates_or_frees() {
         .build()
         .unwrap();
 
-    let (mut c, mut r) = engine(2);
+    let mut config = sbj_engine::EngineConfig::new(RATE, 2);
+    config.declick_frames = 64; // exercise crossfades and stop fades
+    let (mut c, mut r) = sbj_engine::Engine::create(config).unwrap();
     // Mix of device block sizes, including one larger than the engine's
     // internal mix block so the splitting path is covered.
     let mut buf = vec![0.0f32; 2048 * 2];

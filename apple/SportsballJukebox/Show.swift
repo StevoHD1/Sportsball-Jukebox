@@ -15,13 +15,22 @@ struct ShowDoc: Codable, Equatable {
     var format = "sportsball-jukebox-show"
     var version = 1
     var name = "Untitled Show"
+    /// Pads per bank.
     var slots = 24
     var columns = 6
+    var banks: [String] = ["Bank 1"]
     var outputs: [OutputDoc] = [OutputDoc(name: "Main")]
     var cues: [CueDoc] = []
+    var controls = ControlsDoc()
 
     enum CodingKeys: String, CodingKey {
-        case format, version, name, slots, columns, outputs, cues
+        case format, version, name, slots, columns, banks, outputs, cues, controls
+    }
+
+    /// Global slot numbers of a bank's pads.
+    func padRange(bank: Int) -> Range<Int> {
+        let start = bank * slots
+        return start..<(start + slots)
     }
 
     init() {}
@@ -33,6 +42,8 @@ struct ShowDoc: Codable, Equatable {
         name = try c.value(.name, or: name)
         slots = try c.value(.slots, or: slots)
         columns = try c.value(.columns, or: columns)
+        banks = try c.value(.banks, or: banks)
+        controls = try c.value(.controls, or: controls)
         outputs = try c.value(.outputs, or: outputs)
         cues = try c.value(.cues, or: cues)
     }
@@ -47,6 +58,38 @@ struct ShowDoc: Codable, Equatable {
 
     static func encode<T: Encodable>(_ value: T) throws -> String {
         String(decoding: try JSONEncoder().encode(value), as: UTF8.self)
+    }
+}
+
+enum MidiKind: String, Codable {
+    case note, cc, program
+}
+
+struct MidiTrigger: Codable, Equatable, Hashable {
+    var kind: MidiKind
+    var number: Int
+    var channel: Int?
+
+    var label: String {
+        let what: String
+        switch kind {
+        case .note: what = "Note \(number)"
+        case .cc: what = "CC \(number)"
+        case .program: what = "Program \(number)"
+        }
+        return channel.map { "\(what) · ch \($0)" } ?? what
+    }
+}
+
+struct ControlsDoc: Codable, Equatable {
+    var stopAll: MidiTrigger?
+    var nextBank: MidiTrigger?
+    var prevBank: MidiTrigger?
+
+    enum CodingKeys: String, CodingKey {
+        case stopAll = "stop_all"
+        case nextBank = "next_bank"
+        case prevBank = "prev_bank"
     }
 }
 
@@ -90,9 +133,10 @@ struct CueDoc: Codable, Equatable {
     var color: String?
     var clips: [ClipDoc] = []
     var markers: [MarkerDoc] = []
+    var midi: MidiTrigger?
 
     enum CodingKeys: String, CodingKey {
-        case slot, title, hotkey, output, gain, loop, color, clips, markers
+        case slot, title, hotkey, output, gain, loop, color, clips, markers, midi
     }
 
     init(slot: Int, title: String, file: String) {
@@ -116,6 +160,7 @@ struct CueDoc: Codable, Equatable {
         color = try c.decodeIfPresent(String.self, forKey: .color)
         clips = try c.value(.clips, or: [])
         markers = try c.value(.markers, or: [])
+        midi = try c.decodeIfPresent(MidiTrigger.self, forKey: .midi)
     }
 
     /// Smallest marker id not in use.
@@ -243,6 +288,13 @@ struct CueProblem: Decodable, Equatable {
 }
 
 struct SessionStatus: Decodable, Equatable {
+    var bank: Int
+    /// "cue:<slot>", "stop_all", "next_bank", "prev_bank" or nil.
+    var learning: String?
+    var lastControl: String?
+    /// nil when MIDI input is off.
+    var midiInputs: [String]?
+    var oscPort: Int?
     var dirty: Bool
     var path: String?
     var outputs: [OutputState]
@@ -253,5 +305,26 @@ struct SessionStatus: Decodable, Equatable {
         let decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase
         return try decoder.decode(SessionStatus.self, from: Data(json.utf8))
+    }
+}
+
+// MARK: - Pre-game check (from sbj_session_preflight_json)
+
+struct PreflightCheck: Decodable, Equatable, Identifiable {
+    var level: String  // "ok" | "info" | "warning" | "error"
+    var message: String
+
+    var id: String { level + message }
+}
+
+struct PreflightReport: Decodable, Equatable {
+    var ready: Bool
+    var memoryMb: Double
+    var checks: [PreflightCheck]
+
+    static func decode(_ json: String) throws -> PreflightReport {
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        return try decoder.decode(PreflightReport.self, from: Data(json.utf8))
     }
 }

@@ -100,7 +100,10 @@ SbjStatus sbj_session_device_info(const SbjSession *session, uint32_t index,
 /* The show document as JSON. Free with sbj_string_free. */
 char *sbj_session_show_json(const SbjSession *session);
 
-/* {"dirty", "path", "outputs": [{"name","status":"running|on_backup|offline",
+/* {"bank", "learning": "cue:N|stop_all|next_bank|prev_bank"|null,
+ *  "last_control": string|null, "midi_inputs": [string]|null (null = MIDI off),
+ *  "osc_port": number|null, "dirty", "path",
+ *  "outputs": [{"name","status":"running|on_backup|offline",
  *  "device_id","device_name","sample_rate","channels","xruns","error"}],
  *  "problems": [{"slot","message"}], "notices": [string]}.
  * Notices are delivered once. Free with sbj_string_free. */
@@ -111,10 +114,29 @@ SbjStatus sbj_session_new_show(const SbjSession *session);
 SbjStatus sbj_session_open_show(const SbjSession *session, const char *path);
 /* path NULL = the show's current file. Writes atomically. */
 SbjStatus sbj_session_save_show(const SbjSession *session, const char *path);
-SbjStatus sbj_session_set_show_settings(const SbjSession *session, const char *name,
-                                        uint32_t slots, uint32_t columns);
+/* {"name", "slots" (pads per bank), "columns", "banks": [names]}.
+ * Cue slots are bank * slots + pad; resizing keeps each cue's bank/pad. */
+SbjStatus sbj_session_set_show_settings_json(const SbjSession *session, const char *json);
+/* The visible bank (0-based): hotkeys and OSC pad numbers refer to it. */
+SbjStatus sbj_session_set_bank(const SbjSession *session, uint32_t bank);
 /* JSON array of outputs: [{"name", "device": {"id","name"}?, "backup": {...}?}] */
 SbjStatus sbj_session_set_outputs_json(const SbjSession *session, const char *json);
+
+/* ---- External control ------------------------------------------------ */
+
+/* Listen to every MIDI input (true; call again to rescan) or stop. */
+SbjStatus sbj_session_enable_midi(const SbjSession *session, bool enabled);
+/* Listen for OSC on a UDP port; 0 stops. See sbj-session/src/control.rs
+ * for the address space (/sbj/fire/<pad>, /sbj/stopall, ...). */
+SbjStatus sbj_session_set_osc_port(const SbjSession *session, uint16_t port);
+/* Assign the next MIDI message to target: "cue:<slot>", "stop_all",
+ * "next_bank", "prev_bank". NULL cancels. */
+SbjStatus sbj_session_learn_midi(const SbjSession *session, const char *target);
+SbjStatus sbj_session_clear_midi(const SbjSession *session, const char *target);
+
+/* Pre-game check: {"ready", "memory_mb", "checks": [{"level":
+ * "ok|info|warning|error", "message"}]}. Free with sbj_string_free. */
+char *sbj_session_preflight_json(const SbjSession *session);
 
 /* ---- Cues ------------------------------------------------------------- */
 

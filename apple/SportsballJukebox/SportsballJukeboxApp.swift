@@ -26,7 +26,19 @@ struct SportsballJukeboxApp: App {
             CommandMenu("Show") {
                 Button("Audio Outputs…") { model.showingOutputs = true }
                     .keyboardShortcut("u", modifiers: [.command, .shift])
+                Button("MIDI & OSC…") { model.showingControls = true }
+                    .keyboardShortcut("m", modifiers: [.command, .shift])
                 Button("Show Settings…") { model.showingSettings = true }
+                Button("Pre-game Check…") {
+                    model.runPreflight()
+                    model.showingPreflight = true
+                }
+                .keyboardShortcut("k", modifiers: [.command, .shift])
+                Divider()
+                ForEach(Array(model.show.banks.prefix(9).enumerated()), id: \.offset) { index, name in
+                    Button("Bank: \(name)") { model.selectBank(index) }
+                        .keyboardShortcut(KeyEquivalent(Character(String(index + 1))), modifiers: [.command])
+                }
                 Divider()
                 Button("Stop All") { model.stopAll() }
                     .keyboardShortcut(".", modifiers: [.command])

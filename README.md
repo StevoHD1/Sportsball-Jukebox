@@ -5,12 +5,14 @@ as a native macOS app. Inspired by Sports Sounds Pro, it adds
 sample-accurate timeline markers with actions (loop, jump, pause, fade) and
 support for several audio interfaces at once.
 
-**Status:** Phase 2. A Mac app with:
+**Status:** Phase 3. A Mac app with:
 - a configurable pad grid with hotkeys and colours;
 - show files that autosave;
 - several audio interfaces at once, with automatic failover to a backup;
 - a pad editor with a waveform timeline and markers that jump, loop,
-  pause, stop or fade.
+  pause, stop or fade, with click-free crossfades at every jump;
+- banks of pads, MIDI triggers with learn, OSC network control (and so
+  Stream Deck), and a pre-game check.
 
 Requires macOS 14.2+. See [docs/architecture.md](docs/architecture.md),
 and [docs/testing-on-mac.md](docs/testing-on-mac.md) to try it.
@@ -23,10 +25,11 @@ crates/
   sbj-engine/    real-time engine: timeline, markers, players, mixing
   sbj-backend/   audio devices: Core Audio (via cpal) + offline backend for tests
   sbj-media/     file decoding and sample-rate conversion
-  sbj-session/   app model: cues, output device, firing
+  sbj-session/   app model: shows, outputs, cues, banks, MIDI/OSC mapping, pre-game check
+  sbj-control/   MIDI (CoreMIDI) and OSC (UDP) listeners
   sbj-ffi/       C ABI for the Swift app (header in include/)
 scripts/         build helpers (Rust engine → universal static library)
-docs/            architecture, design notes, Mac testing guide
+docs/            architecture, Mac testing guide, MIDI/OSC/Stream Deck, releasing
 ```
 
 ## Development

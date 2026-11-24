@@ -24,8 +24,10 @@ use serde::{Deserialize, Serialize};
 
 pub const SHOW_FORMAT: &str = "sportsball-jukebox-show";
 pub const SHOW_VERSION: u32 = 1;
-/// Upper bound on pad slots (and engine players per output).
-pub const MAX_SLOTS: u32 = 128;
+/// Upper bound on pads across all banks (and engine players per output).
+pub const MAX_SLOTS: u32 = 512;
+/// Upper bound on pads in one bank.
+pub const MAX_PADS_PER_BANK: u32 = 128;
 /// Prefix of the problem reported for a clip whose audio is not loaded.
 pub const MISSING_FILE: &str = "missing audio file: ";
 /// Marker id reserved for a cue's whole-cue loop.
@@ -39,6 +41,15 @@ fn default_slots() -> u32 {
 }
 fn default_columns() -> u32 {
     6
+}
+fn default_banks() -> Vec<String> {
+    vec!["Bank 1".into()]
+}
+fn is_default_banks(banks: &[String]) -> bool {
+    banks.len() == 1 && banks[0] == "Bank 1"
+}
+fn is_default_controls(c: &ControlsDoc) -> bool {
+    *c == ControlsDoc::default()
 }
 fn default_outputs() -> Vec<OutputDoc> {
     vec![OutputDoc::named("Main")]
@@ -63,9 +74,12 @@ pub struct Show {
     pub version: u32,
     #[serde(default)]
     pub name: String,
-    /// Number of pads in the grid.
+    /// Number of pads in each bank's grid.
     #[serde(default = "default_slots")]
     pub slots: u32,
+    /// Pages of pads. A cue's `slot` is `bank * slots + pad`.
+    #[serde(default = "default_banks", skip_serializing_if = "is_default_banks")]
+    pub banks: Vec<String>,
     #[serde(default = "default_columns")]
     pub columns: u32,
     /// Logical outputs ("Main", "Locker room", ...). Cues route to one by
@@ -74,6 +88,59 @@ pub struct Show {
     pub outputs: Vec<OutputDoc>,
     #[serde(default)]
     pub cues: Vec<CueDoc>,
+    /// MIDI triggers for show-wide actions.
+    #[serde(default, skip_serializing_if = "is_default_controls")]
+    pub controls: ControlsDoc,
+}
+
+/// MIDI message kinds that can trigger things.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MidiKind {
+    Note,
+    Cc,
+    Program,
+}
+
+/// A MIDI message that triggers something: note-on, a CC with a non-zero
+/// value, or a program change.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct MidiTrigger {
+    pub kind: MidiKind,
+    /// Note, controller or program number (0-127).
+    pub number: u8,
+    /// 1-16, or `None` for any channel.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel: Option<u8>,
+}
+
+impl MidiTrigger {
+    pub fn matches(&self, kind: MidiKind, number: u8, channel: u8) -> bool {
+        self.kind == kind && self.number == number && self.channel.is_none_or(|c| c == channel)
+    }
+
+    pub fn describe(&self) -> String {
+        let what = match self.kind {
+            MidiKind::Note => format!("Note {}", self.number),
+            MidiKind::Cc => format!("CC {}", self.number),
+            MidiKind::Program => format!("Program {}", self.number),
+        };
+        match self.channel {
+            Some(c) => format!("{what} ch {c}"),
+            None => what,
+        }
+    }
+}
+
+/// Show-wide MIDI controls.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ControlsDoc {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stop_all: Option<MidiTrigger>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_bank: Option<MidiTrigger>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prev_bank: Option<MidiTrigger>,
 }
 
 impl Default for Show {
@@ -83,9 +150,11 @@ impl Default for Show {
             version: SHOW_VERSION,
             name: "Untitled Show".into(),
             slots: default_slots(),
+            banks: default_banks(),
             columns: default_columns(),
             outputs: default_outputs(),
             cues: Vec::new(),
+            controls: ControlsDoc::default(),
         }
     }
 }
@@ -146,6 +215,9 @@ pub struct CueDoc {
     pub clips: Vec<ClipDoc>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub markers: Vec<MarkerDoc>,
+    /// MIDI message that fires the cue.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub midi: Option<MidiTrigger>,
 }
 
 impl CueDoc {
@@ -161,6 +233,7 @@ impl CueDoc {
             color: None,
             clips: vec![ClipDoc::file(file)],
             markers: Vec::new(),
+            midi: None,
         }
     }
 }
@@ -330,19 +403,24 @@ impl Show {
                 "a show needs at least one output".into(),
             ));
         }
-        if self.slots == 0 || self.slots > MAX_SLOTS {
+        if self.slots == 0 || self.slots > MAX_PADS_PER_BANK {
             return Err(ShowError::Invalid(format!(
-                "pad count must be 1-{MAX_SLOTS}"
+                "pads per bank must be 1-{MAX_PADS_PER_BANK}"
+            )));
+        }
+        if self.banks.is_empty() || self.total_slots() > MAX_SLOTS {
+            return Err(ShowError::Invalid(format!(
+                "a show needs 1 or more banks and at most {MAX_SLOTS} pads in total"
             )));
         }
         let mut seen = std::collections::HashSet::new();
         for cue in &self.cues {
-            if cue.slot >= self.slots {
+            if cue.slot >= self.total_slots() {
                 return Err(ShowError::Invalid(format!(
                     "cue \"{}\" is in pad {} but the show has {} pads",
                     cue.title,
                     cue.slot + 1,
-                    self.slots
+                    self.total_slots()
                 )));
             }
             if !seen.insert(cue.slot) {
@@ -353,6 +431,11 @@ impl Show {
             }
         }
         Ok(())
+    }
+
+    /// Pads across all banks.
+    pub fn total_slots(&self) -> u32 {
+        self.slots.saturating_mul(self.banks.len() as u32)
     }
 
     pub fn cue(&self, slot: u32) -> Option<&CueDoc> {

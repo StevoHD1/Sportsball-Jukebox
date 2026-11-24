@@ -25,6 +25,7 @@ pub fn ramp(range: std::ops::Range<usize>) -> Vec<f32> {
 pub fn engine(channels: u16) -> (Controller, Renderer) {
     let mut config = EngineConfig::new(RATE, channels);
     config.gain_ramp_frames = 0;
+    config.declick_frames = 0;
     Engine::create(config).unwrap()
 }
 

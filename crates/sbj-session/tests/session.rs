@@ -167,6 +167,7 @@ fn cues_route_to_their_output_and_convert_rate() {
 fn failover_to_backup_resumes_playback() {
     let backend = two_devices();
     let mut s = Session::new(backend.clone());
+    s.set_declick(0.0);
     s.install_show(
         Show {
             outputs: vec![OutputDoc {
@@ -300,8 +301,13 @@ fn errors_and_limits() {
     ));
     s.add_sound("a".into(), constant(0.5, 10));
     s.set_cue(simple(20, "a")).unwrap();
-    assert!(s.set_show_settings("x", 10, 5).is_err(), "pad 21 in use");
-    s.set_show_settings("Opener", 30, 6).unwrap();
+    assert!(
+        s.set_show_settings("x", 10, 5, vec!["Bank 1".into()])
+            .is_err(),
+        "pad 21 in use"
+    );
+    s.set_show_settings("Opener", 30, 6, vec!["Bank 1".into()])
+        .unwrap();
     assert_eq!(s.show().slots, 30);
     assert!(s.is_dirty());
 }
@@ -354,6 +360,7 @@ fn shows_save_load_and_find_moved_audio() {
     let decoded = decode_files(&loaded.files(), Some(dir.path()), &[48_000]);
     assert!(decoded.failures.is_empty(), "{:?}", decoded.failures);
     let mut s = Session::new(backend);
+    s.set_declick(0.0);
     s.install_show(loaded, Some(path.clone()), decoded);
     assert!(s.problems().is_empty(), "{:?}", s.problems());
     s.fire_cue(4).unwrap();
@@ -361,7 +368,8 @@ fn shows_save_load_and_find_moved_audio() {
     assert!(out[50] > 0.1 && out[50] < 0.15, "{}", out[50]); // 8000/32768 * 0.5
 
     // Saving round-trips and clears the dirty flag.
-    s.set_show_settings("Renamed", 24, 6).unwrap();
+    s.set_show_settings("Renamed", 24, 6, vec!["Bank 1".into()])
+        .unwrap();
     s.save_show(&path).unwrap();
     assert!(!s.is_dirty());
     assert_eq!(Show::load(&path).unwrap().name, "Renamed");

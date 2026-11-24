@@ -37,6 +37,22 @@ final class AppModel: ObservableObject {
     @Published var editing: EditTarget?
     @Published var showingOutputs = false
     @Published var showingSettings = false
+    @Published var showingControls = false
+    @Published var showingPreflight = false
+    @Published private(set) var preflight: PreflightReport?
+    @Published var midiEnabled: Bool = UserDefaults.standard.object(forKey: "midiEnabled") as? Bool ?? true {
+        didSet {
+            UserDefaults.standard.set(midiEnabled, forKey: "midiEnabled")
+            applyMIDI()
+        }
+    }
+    /// 0 = OSC off.
+    @Published var oscPort: Int = UserDefaults.standard.integer(forKey: "oscPort") {
+        didSet {
+            UserDefaults.standard.set(oscPort, forKey: "oscPort")
+            applyOSC()
+        }
+    }
     @Published var masterVolume: Double = 1.0 {
         didSet { report { try session.setMasterGain(Self.gain(forSlider: masterVolume)) } }
     }
@@ -72,9 +88,16 @@ final class AppModel: ObservableObject {
         refreshDevices()
         session.openOutputs()
         refreshShow()
+        applyMIDI()
+        applyOSC()
 
-        if let path = UserDefaults.standard.string(forKey: Self.lastShowKey),
-           FileManager.default.fileExists(atPath: path) {
+        if let screenshots = ScreenshotDirector.fromArguments() {
+            // Demo / documentation mode: open the given show, capture the
+            // main screens, quit.
+            openShow(at: screenshots.show)
+            screenshots.run(model: self)
+        } else if let path = UserDefaults.standard.string(forKey: Self.lastShowKey),
+                  FileManager.default.fileExists(atPath: path) {
             openShow(at: URL(fileURLWithPath: path))
         }
 
@@ -96,6 +119,16 @@ final class AppModel: ObservableObject {
         return (status?.dirty ?? false) ? "\(name) — Edited" : name
     }
 
+    /// The bank shown in the grid (MIDI/OSC can change it too).
+    var currentBank: Int {
+        min(status?.bank ?? 0, max(show.banks.count - 1, 0))
+    }
+
+    func selectBank(_ bank: Int) {
+        report { try session.setBank(bank) }
+        refreshStatus()
+    }
+
     func state(of slot: Int) -> CueStatus {
         cueStates.indices.contains(slot) ? cueStates[slot] : CueStatus()
     }
@@ -108,13 +141,15 @@ final class AppModel: ObservableObject {
 
     private func onTick() {
         session.poll()
-        let states = session.cueStates(count: show.slots)
+        let states = session.cueStates(count: show.slots * max(show.banks.count, 1))
         if states != cueStates {
             cueStates = states
         }
         tick += 1
-        if tick % 10 == 0 {  // ~3 Hz
+        if tick % 3 == 0 {  // ~10 Hz: bank changes and MIDI learn feel live
             refreshStatus()
+        }
+        if tick % 30 == 0 {  // ~1 Hz
             autosaveIfNeeded()
         }
     }
@@ -131,8 +166,13 @@ final class AppModel: ObservableObject {
         }
         var current = new
         current.notices = []
+        // A finished MIDI learn changed the show on the engine side.
+        let finishedLearning = status?.learning != nil && current.learning == nil
         if current != status {
             status = current
+        }
+        if finishedLearning {
+            refreshShow()
         }
     }
 
@@ -255,10 +295,61 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func applySettings(name: String, slots: Int, columns: Int) {
-        report { try session.setShowSettings(name: name, slots: slots, columns: columns) }
+    func applySettings(name: String, slots: Int, columns: Int, banks: [String]) {
+        report { try session.setShowSettings(name: name, slots: slots, columns: columns, banks: banks) }
         refreshShow()
     }
+
+    // MARK: - MIDI, OSC, pre-game check
+
+    private func applyMIDI() {
+        do {
+            try session.enableMIDI(midiEnabled)
+        } catch {
+            alert = AlertMessage(title: "MIDI", message: error.localizedDescription)
+        }
+        refreshStatus()
+    }
+
+    private func applyOSC() {
+        do {
+            try session.setOSCPort(oscPort)
+        } catch {
+            alert = AlertMessage(title: "OSC", message: error.localizedDescription)
+        }
+        refreshStatus()
+    }
+
+    func rescanMIDI() {
+        applyMIDI()
+    }
+
+    /// Starts MIDI learn for "cue:<slot>", "stop_all", "next_bank" or
+    /// "prev_bank"; the next MIDI message received is assigned to it.
+    func learnMIDI(_ target: String) {
+        if !midiEnabled {
+            midiEnabled = true
+        }
+        report { try session.learnMIDI(target: target) }
+        refreshStatus()
+    }
+
+    func cancelLearn() {
+        report { try session.learnMIDI(target: nil) }
+        refreshStatus()
+    }
+
+    func clearMIDI(_ target: String) {
+        report { try session.clearMIDI(target: target) }
+        refreshShow()
+    }
+
+    var learningTarget: String? { status?.learning }
+
+    func runPreflight() {
+        preflight = session.preflight()
+    }
+
 
     func applyOutputs(_ outputs: [OutputDoc]) {
         report { try session.setOutputs(outputs) }
@@ -300,12 +391,17 @@ final class AppModel: ObservableObject {
         updateCue(cue)
     }
 
-    /// The pad's default key if unused, else the first unused one.
+    /// The pad's default key (by its position in its bank) if unused in
+    /// that bank, else the first unused one. Keys only act in the visible
+    /// bank, so banks can reuse them.
     private func freeHotkey(preferring slot: Int) -> String? {
-        let used = Set(show.cues.compactMap(\.hotkey))
+        let perBank = max(show.slots, 1)
+        let bank = slot / perBank
+        let used = Set(show.cues.filter { $0.slot / perBank == bank }.compactMap(\.hotkey))
         let keys = Self.defaultHotkeys.map(String.init)
-        if keys.indices.contains(slot), !used.contains(keys[slot]) {
-            return keys[slot]
+        let position = slot % perBank
+        if keys.indices.contains(position), !used.contains(keys[position]) {
+            return keys[position]
         }
         return keys.first { !used.contains($0) }
     }

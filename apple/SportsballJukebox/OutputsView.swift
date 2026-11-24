@@ -165,39 +165,77 @@ private struct DevicePicker: View {
     }
 }
 
-/// Show name and grid size.
+/// Show name, grid size and banks.
 struct ShowSettingsView: View {
+    private struct Bank: Identifiable {
+        let id = UUID()
+        var name: String
+    }
+
     @EnvironmentObject private var model: AppModel
     @Environment(\.dismiss) private var dismiss
     @State private var name = ""
     @State private var slots = 24
     @State private var columns = 6
+    @State private var banks: [Bank] = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("Show Settings").font(.title2.bold())
             Form {
                 TextField("Name", text: $name)
-                Stepper("Pads: \(slots)", value: $slots, in: 1...128)
+                Stepper("Pads per bank: \(slots)", value: $slots, in: 1...128)
                 Stepper("Columns: \(columns)", value: $columns, in: 1...16)
             }
+            Text("Banks").font(.headline)
+            Text("Each bank is a page of pads. Switch with ⌘1–⌘9, the bank tabs, MIDI or OSC.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            ForEach($banks) { $bank in
+                HStack {
+                    TextField("Bank name", text: $bank.name)
+                        .textFieldStyle(.roundedBorder)
+                    Button(role: .destructive) {
+                        banks.removeAll { $0.id == bank.id }
+                    } label: {
+                        Image(systemName: "trash")
+                    }
+                    .disabled(banks.count <= 1)
+                }
+            }
+            Button {
+                banks.append(Bank(name: "Bank \(banks.count + 1)"))
+            } label: {
+                Label("Add Bank", systemImage: "plus")
+            }
+            .disabled(slots * (banks.count + 1) > 512)
+            Text("Total: \(slots * banks.count) pads (max 512).")
+                .font(.caption)
+                .foregroundStyle(.secondary)
             HStack {
                 Spacer()
                 Button("Cancel") { dismiss() }
                     .keyboardShortcut(.cancelAction)
                 Button("Apply") {
-                    model.applySettings(name: name, slots: slots, columns: columns)
+                    model.applySettings(
+                        name: name,
+                        slots: slots,
+                        columns: columns,
+                        banks: banks.map(\.name)
+                    )
                     dismiss()
                 }
                 .keyboardShortcut(.defaultAction)
+                .disabled(slots * banks.count > 512)
             }
         }
         .padding(20)
-        .frame(width: 380)
+        .frame(width: 420)
         .onAppear {
             name = model.show.name
             slots = model.show.slots
             columns = model.show.columns
+            banks = model.show.banks.map { Bank(name: $0) }
         }
     }
 }

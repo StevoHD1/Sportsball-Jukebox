@@ -33,6 +33,10 @@ pub struct EngineConfig {
     pub event_capacity: usize,
     /// Length of the ramp used to smooth gain changes, in frames.
     pub gain_ramp_frames: u32,
+    /// Length of the crossfade applied when the playhead jumps while
+    /// audible (marker jumps and loops, retriggers, seeks) and of the fade
+    /// on an operator stop, so none of them click. 0 = hard cuts.
+    pub declick_frames: u32,
 }
 
 impl EngineConfig {
@@ -46,6 +50,8 @@ impl EngineConfig {
             event_capacity: 4096,
             // 10 ms: fast enough to feel instant, slow enough not to click.
             gain_ramp_frames: sample_rate / 100,
+            // 3 ms: inaudible as a fade, long enough to remove clicks.
+            declick_frames: sample_rate * 3 / 1000,
         }
     }
 }
