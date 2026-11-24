@@ -40,5 +40,8 @@ git push origin v0.1.0
 ```
 
 Or on GitHub: **Releases → Draft a new release → Choose a tag**, type
-`v0.1.0`, **Create new tag on publish**, and publish. CI then attaches
-the disk image to that release a few minutes later.
+`v0.1.0`, **Create new tag on publish**, pick the branch to release, and
+publish. CI then attaches the disk image to that release about ten
+minutes later. If it doesn't (no run under **Actions**), start it by
+hand: **Actions → CI → Run workflow**, and choose the tag instead of a
+branch.

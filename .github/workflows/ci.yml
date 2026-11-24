@@ -6,6 +6,9 @@ on:
     # A version tag (v0.1.0) builds the installer and publishes a release.
     tags: ["v*"]
   pull_request:
+  # A release published on github.com (its tag may not send a push event).
+  release:
+    types: [published]
   workflow_dispatch:
 
 concurrency:
@@ -131,8 +134,8 @@ jobs:
           name: screenshots
           path: screenshots/*.png
           retention-days: 30
-      - name: Commit screenshots to the branch (manual runs only)
-        if: github.event_name == 'workflow_dispatch'
+      - name: Commit screenshots to the branch (manual runs on a branch only)
+        if: github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/')
         run: |
           mkdir -p docs/screenshots
           cp screenshots/*.png docs/screenshots/
