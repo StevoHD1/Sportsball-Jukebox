@@ -335,6 +335,7 @@ private struct CueTimeline: View {
     }
 
     var body: some View {
+        GeometryReader { viewport in
         ScrollView([.horizontal, .vertical]) {
             VStack(alignment: .leading, spacing: 0) {
                 RulerView(width: width, pointsPerSecond: pointsPerSecond) { seconds in
@@ -384,8 +385,11 @@ private struct CueTimeline: View {
                 }
                 .allowsHitTesting(false)
             }
+            // Fill the visible height so short content sits at the top
+            // instead of being centred.
+            .frame(minHeight: viewport.size.height, alignment: .topLeading)
         }
-        .defaultScrollAnchor(.topLeading)
+        }
         .background(Color.black.opacity(0.15))
     }
 }
