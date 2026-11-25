@@ -258,6 +258,24 @@ built-in speakers or headphones)
       on an empty pad: it gets them. Right-click a pad → Use Style for New
       Pads does the same from a pad.
 
+**Phase 13: layout and live transport**
+- [ ] Show Settings → Pads per bank: raise it (e.g. 48). In the bank bar,
+      turn **Fit** on: all pads fit the window and resize with it. Turn it
+      off and use the size slider (or ⌘+ / ⌘−): pads keep that size and
+      the grid scrolls.
+- [ ] Now Playing is a strip across the top; Show → "Now Playing on the
+      Right" moves it back. Drag the edge of the Library, Rundown or
+      Now Playing column to resize it; the width is remembered.
+- [ ] While a pad plays, click partway along its bar in Now Playing: it
+      jumps there without a click. Drag along the bar to scrub.
+- [ ] Fire two pads, press **Fade Last** (⇧Esc): the second fades; press
+      it again: the first fades. Stop Last (⌥Esc) cuts instead.
+- [ ] Turn **Multiplay** off for a bank, fire one pad then another: the
+      first fades out. Other banks are unaffected.
+- [ ] Set a Preview output (Audio Outputs), right-click a pad → Preview:
+      the preview player appears bottom right. Click or drag its bar to
+      hear the middle or end; ⏮ restarts; ✕ stops.
+
 **Stress**
 - [ ] Leave a looping cue running for 10+ minutes. The status line should
       not start showing "glitches".

@@ -133,6 +133,7 @@ impl<B: AudioBackend> Session<B> {
             "pads": pads,
             "playing": playing,
             "last_control": self.last_control,
+            "last": self.last_playing().and_then(|slot| self.show.cue(slot)).map(|c| c.title.clone()),
         })
     }
 
@@ -158,6 +159,7 @@ impl<B: AudioBackend> Session<B> {
                 format!("/sbj/{verb}/{}/{}", slot / slots + 1, slot % slots + 1)
             }
             ("POST", ["go"]) => "/sbj/go".into(),
+            ("POST", [verb @ ("fadelast" | "stoplast")]) => format!("/sbj/{verb}"),
             ("POST", ["rundown", dir @ ("next" | "prev")]) => format!("/sbj/rundown/{dir}"),
             ("POST", ["stopall"]) => "/sbj/stopall".into(),
             ("POST", ["stopall", "now"]) => "/sbj/stopall/now".into(),

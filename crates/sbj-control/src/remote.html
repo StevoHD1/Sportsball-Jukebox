@@ -24,6 +24,10 @@
     background: var(--danger); color: white; border: 0; border-radius: 10px;
     font-weight: 700; font-size: 16px; padding: 12px 18px;
   }
+  #fadelast {
+    background: #3a3b42; color: white; border: 0; border-radius: 10px;
+    font-weight: 700; font-size: 13px; padding: 12px 12px;
+  }
   #banks { display: flex; gap: 6px; overflow-x: auto; padding: 4px 0 10px; }
   #banks button {
     background: var(--empty); color: var(--text); border: 0; border-radius: 999px;
@@ -84,6 +88,7 @@
 <header>
   <h1 id="show">Sportsball Jukebox</h1>
   <span id="status">Connecting…</span>
+  <button id="fadelast" title="Fade out the last pad fired">FADE LAST</button>
   <button id="stopall">STOP ALL</button>
 </header>
 <nav id="banks"></nav>
@@ -148,6 +153,7 @@ document.getElementById("pin-input").addEventListener("keydown", (e) => {
   if (e.key === "Enter") document.getElementById("pin-ok").click();
 });
 document.getElementById("stopall").onclick = () => send("stopall");
+document.getElementById("fadelast").onclick = () => send("fadelast");
 document.getElementById("go").onclick = () => send("go");
 document.getElementById("rd-prev").onclick = () => send("rundown/prev");
 document.getElementById("rd-next-btn").onclick = () => send("rundown/next");

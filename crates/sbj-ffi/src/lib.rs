@@ -557,6 +557,7 @@ pub unsafe extern "C" fn sbj_session_status_json(session: *const SbjSession) -> 
                     "file": p.file,
                     "playing": p.playing,
                     "position": p.position_seconds,
+                    "duration": p.duration_seconds,
                 })
             });
             let mut notices = session.take_notices();
@@ -569,6 +570,8 @@ pub unsafe extern "C" fn sbj_session_status_json(session: *const SbjSession) -> 
                 "preview": preview,
                 "bank": session.current_bank(),
                 "standby": session.standby(),
+                "last": session.last_playing(),
+                "single_play": session.show().single_play,
                 "learning": session.learning().map(target_name),
                 "last_control": session.last_control(),
                 "midi_inputs": midi_inputs,
@@ -833,6 +836,59 @@ pub unsafe extern "C" fn sbj_session_step_standby(
     unsafe {
         with_session(session, |s| {
             s.lock().step_standby(forward);
+            SbjStatus::Ok
+        })
+    }
+}
+
+/// Moves the preview's playhead to `seconds`, playing it again if it had
+/// stopped (the preview player's scrub bar).
+///
+/// # Safety
+/// `session` must be null or a live session.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sbj_session_seek_preview(
+    session: *const SbjSession,
+    seconds: f64,
+) -> SbjStatus {
+    // SAFETY: forwarded caller contract.
+    unsafe { with_session(session, |s| session_status(s.lock().seek_preview(seconds))) }
+}
+
+/// Fades out (`fade`, over the pad's own fade-out) or stops the most
+/// recently fired pad that is still playing. Nothing playing is not an
+/// error.
+///
+/// # Safety
+/// `session` must be null or a live session.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sbj_session_stop_last(
+    session: *const SbjSession,
+    fade: bool,
+) -> SbjStatus {
+    // SAFETY: forwarded caller contract.
+    unsafe {
+        with_session(session, |s| {
+            session_status(s.lock().stop_last(fade).map(|_| ()))
+        })
+    }
+}
+
+/// Multiplay on (default) lets a bank's pads play over each other; off
+/// (single-play) makes firing a pad fade out the bank's other pads.
+///
+/// # Safety
+/// `session` must be null or a live session.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sbj_session_set_bank_multiplay(
+    session: *const SbjSession,
+    bank: u32,
+    multiplay: bool,
+) -> SbjStatus {
+    // SAFETY: forwarded caller contract.
+    unsafe {
+        with_session(session, |s| {
+            s.lock().set_bank_multiplay(bank, multiplay);
             SbjStatus::Ok
         })
     }
@@ -1138,6 +1194,7 @@ fn parse_target(target: &str) -> Option<LearnTarget> {
         "next_bank" => Some(LearnTarget::NextBank),
         "prev_bank" => Some(LearnTarget::PrevBank),
         "rundown_go" => Some(LearnTarget::RundownGo),
+        "fade_last" => Some(LearnTarget::FadeLast),
         other => other
             .strip_prefix("cue:")
             .and_then(|n| n.parse().ok())
@@ -1151,6 +1208,7 @@ fn target_name(target: LearnTarget) -> String {
         LearnTarget::NextBank => "next_bank".into(),
         LearnTarget::PrevBank => "prev_bank".into(),
         LearnTarget::RundownGo => "rundown_go".into(),
+        LearnTarget::FadeLast => "fade_last".into(),
         LearnTarget::Cue(slot) => format!("cue:{slot}"),
     }
 }
@@ -1448,6 +1506,10 @@ cue_fn!(
     /// Plays a pad on the preview output (e.g. headphones) without
     /// affecting the main outputs; previewing the same pad again stops it.
     sbj_session_preview_cue() => |s, slot| s.preview_cue(slot));
+cue_fn!(
+    /// Moves a playing pad's playhead to `seconds` (scrubbing); does
+    /// nothing if it isn't playing.
+    sbj_session_seek_cue(seconds: f64) => |s, slot| s.seek_cue(slot, seconds));
 cue_fn!(
     /// Playlist pad: crossfade to the next song (or start, if stopped).
     sbj_session_skip_cue() => |s, slot| s.skip_cue(slot));

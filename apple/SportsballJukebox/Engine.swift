@@ -192,6 +192,24 @@ final class EngineSession: @unchecked Sendable {
         try Engine.check(sbj_session_set_show_settings_json(handle, json))
     }
 
+    // MARK: Live transport
+
+    func seekCue(slot: Int, seconds: Double) throws {
+        try Engine.check(sbj_session_seek_cue(handle, UInt32(clamping: slot), seconds))
+    }
+
+    func seekPreview(seconds: Double) throws {
+        try Engine.check(sbj_session_seek_preview(handle, seconds))
+    }
+
+    func stopLast(fade: Bool) throws {
+        try Engine.check(sbj_session_stop_last(handle, fade))
+    }
+
+    func setBankMultiplay(_ bank: Int, _ multiplay: Bool) throws {
+        try Engine.check(sbj_session_set_bank_multiplay(handle, UInt32(clamping: bank), multiplay))
+    }
+
     // MARK: Library
 
     func library() -> [LibraryEntry] {

@@ -66,6 +66,11 @@ int main(void) {
     CHECK(info != NULL && strstr(info, "\"loudness\"") != NULL);
     printf("sound info: %s\n", info);
     sbj_string_free(info);
+    (void)sbj_session_seek_cue(s, 3, 0.05); /* NO_OUTPUT where there is no device */
+    CHECK(sbj_session_seek_preview(s, 0.0) == SBJ_STATUS_OK); /* nothing previewing: no-op */
+    CHECK(sbj_session_stop_last(s, true) == SBJ_STATUS_OK);
+    CHECK(sbj_session_set_bank_multiplay(s, 0, false) == SBJ_STATUS_OK);
+    CHECK(sbj_session_set_bank_multiplay(s, 0, true) == SBJ_STATUS_OK);
     CHECK(sbj_session_set_pad_defaults_json(s, "{\"color\":\"#ff0000\",\"fade_in\":0.5}")
           == SBJ_STATUS_OK);
     CHECK(sbj_session_set_pad_defaults_json(s, "{\"fade_in\":\"x\"}") == SBJ_STATUS_INVALID_ARGUMENT);

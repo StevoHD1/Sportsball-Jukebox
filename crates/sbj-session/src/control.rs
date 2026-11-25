@@ -102,6 +102,8 @@ pub enum LearnTarget {
     PrevBank,
     /// GO on the rundown.
     RundownGo,
+    /// Fade out the most recently fired pad still playing.
+    FadeLast,
 }
 
 impl<B: AudioBackend> Session<B> {
@@ -137,6 +139,7 @@ impl<B: AudioBackend> Session<B> {
             LearnTarget::NextBank => controls.next_bank = trigger,
             LearnTarget::PrevBank => controls.prev_bank = trigger,
             LearnTarget::RundownGo => controls.rundown_go = trigger,
+            LearnTarget::FadeLast => controls.fade_last = trigger,
             LearnTarget::Cue(slot) => {
                 if let Some(cue) = self.show.cues.iter_mut().find(|c| c.slot == slot) {
                     cue.midi = trigger;
@@ -197,6 +200,9 @@ impl<B: AudioBackend> Session<B> {
         if matches(&controls.rundown_go) {
             return Some(self.control_go());
         }
+        if matches(&controls.fade_last) {
+            return Some(self.control_stop_last(true));
+        }
         let slots: Vec<u32> = self
             .show
             .cues
@@ -236,6 +242,8 @@ impl<B: AudioBackend> Session<B> {
 
         let outcome = match parts.as_slice() {
             ["sbj", "go"] => self.control_go(),
+            ["sbj", "fadelast"] => self.control_stop_last(true),
+            ["sbj", "stoplast"] => self.control_stop_last(false),
             ["sbj", "rundown", "next"] => {
                 self.step_standby(true);
                 self.describe_standby()
@@ -343,6 +351,7 @@ impl<B: AudioBackend> Session<B> {
             LearnTarget::NextBank => "Next Bank".into(),
             LearnTarget::PrevBank => "Previous Bank".into(),
             LearnTarget::RundownGo => "Rundown GO".into(),
+            LearnTarget::FadeLast => "Fade Last".into(),
             LearnTarget::Cue(slot) => match self.show.cue(slot) {
                 Some(c) if !c.title.is_empty() => format!("\"{}\"", c.title),
                 _ => {
@@ -362,6 +371,18 @@ impl<B: AudioBackend> Session<B> {
             (Ok(Some(_)), Some(label)) => format!("GO \"{label}\""),
             (Ok(_), _) => "GO: the rundown is finished".into(),
             (Err(e), label) => format!("GO \"{}\" failed: {e}", label.unwrap_or_default()),
+        }
+    }
+
+    fn control_stop_last(&mut self, fade: bool) -> String {
+        let verb = if fade { "fade" } else { "stop" };
+        match self.stop_last(fade) {
+            Ok(Some(slot)) => format!(
+                "{verb} last: {}",
+                self.describe_target(LearnTarget::Cue(slot))
+            ),
+            Ok(None) => format!("{verb} last: nothing playing"),
+            Err(e) => format!("{verb} last failed: {e}"),
         }
     }
 

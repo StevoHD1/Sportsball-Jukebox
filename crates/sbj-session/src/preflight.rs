@@ -166,6 +166,7 @@ impl<B: AudioBackend> Session<B> {
             ("Next Bank", controls.next_bank),
             ("Previous Bank", controls.prev_bank),
             ("Rundown GO", controls.rundown_go),
+            ("Fade Last", controls.fade_last),
         ] {
             if let Some(t) = trigger {
                 midi.entry(t).or_default().push(name.into());

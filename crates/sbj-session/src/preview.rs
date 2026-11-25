@@ -25,6 +25,7 @@ pub struct PreviewState {
     pub file: Option<String>,
     pub playing: bool,
     pub position_seconds: f64,
+    pub duration_seconds: f64,
 }
 
 impl<B: AudioBackend> Session<B> {
@@ -106,6 +107,7 @@ impl<B: AudioBackend> Session<B> {
             }
         };
 
+        self.preview_length = samples_to_seconds(timeline.length(), rate);
         let live = self.outputs[output]
             .live
             .as_mut()
@@ -149,6 +151,7 @@ impl<B: AudioBackend> Session<B> {
             .clip(Clip::new(buffer).with_gain(gain))
             .build()
             .map_err(|e| SessionError::Show(ShowError::Invalid(e.to_string())))?;
+        self.preview_length = samples_to_seconds(timeline.length(), rate);
         let live = self.outputs[output]
             .live
             .as_mut()
@@ -159,6 +162,26 @@ impl<B: AudioBackend> Session<B> {
         live.controller.play(PREVIEW_PLAYER)?;
         self.previewing = Some((FILE_PREVIEW, output));
         self.previewing_file = Some(file.to_string());
+        Ok(())
+    }
+
+    /// Moves the preview's playhead (playing it again if it had stopped),
+    /// for the preview player's scrub bar.
+    pub fn seek_preview(&mut self, seconds: f64) -> Result<()> {
+        let Some((_, output)) = self.previewing else {
+            return Ok(());
+        };
+        let length = self.preview_length;
+        let live = self
+            .outputs
+            .get_mut(output)
+            .and_then(|o| o.live.as_mut())
+            .ok_or(SessionError::NoOutput)?;
+        let seconds = if seconds.is_finite() { seconds } else { 0.0 };
+        let position =
+            sbj_engine::seconds_to_samples(seconds.clamp(0.0, length), live.config.sample_rate);
+        live.controller.seek(PREVIEW_PLAYER, position)?;
+        live.controller.play(PREVIEW_PLAYER)?;
         Ok(())
     }
 
@@ -182,6 +205,7 @@ impl<B: AudioBackend> Session<B> {
                 live.controller.position(PREVIEW_PLAYER),
                 live.config.sample_rate,
             ),
+            duration_seconds: self.preview_length,
         })
     }
 }

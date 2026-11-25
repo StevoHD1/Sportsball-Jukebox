@@ -23,6 +23,7 @@ impl<B: AudioBackend> Session<B> {
         };
         if cue.playlist.is_some() {
             if self.fire_playlist(slot, &cue)? {
+                self.single_play_handover(slot);
                 self.after_start(slot, &cue);
             }
             return Ok(());
@@ -61,6 +62,7 @@ impl<B: AudioBackend> Session<B> {
                 .set_player_gain_over(player, cue.gain * duck, fade_in)?;
         }
         self.log_start(slot, None);
+        self.single_play_handover(slot);
         self.after_start(slot, &cue);
         Ok(())
     }
@@ -68,6 +70,7 @@ impl<B: AudioBackend> Session<B> {
     /// After a pad starts: exclusive-group hand-over and ducking.
     fn after_start(&mut self, slot: u32, cue: &crate::CueDoc) {
         self.recent_fires.insert(slot, Instant::now());
+        self.remember_fire(slot);
 
         // Exclusive group: hand over from whatever else in the group plays.
         if let Some(group) = cue

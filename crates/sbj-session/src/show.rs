@@ -122,6 +122,10 @@ pub struct Show {
     /// Settings given to new pads when audio is dropped on an empty pad.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pad_defaults: Option<PadDefaults>,
+    /// Banks (0-based) with Multiplay off: firing a pad fades out the
+    /// bank's other pads.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub single_play: Vec<u32>,
 }
 
 /// Settings for new pads (applied by the app when it creates a pad).
@@ -234,6 +238,9 @@ pub struct ControlsDoc {
     /// GO on the rundown: fire the standby step.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rundown_go: Option<MidiTrigger>,
+    /// Fade out the most recently fired pad still playing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fade_last: Option<MidiTrigger>,
 }
 
 /// One step of the game rundown: a pad to fire, or a note (e.g.
@@ -269,6 +276,7 @@ impl Default for Show {
             rundown: Vec::new(),
             library: Vec::new(),
             pad_defaults: None,
+            single_play: Vec::new(),
         }
     }
 }

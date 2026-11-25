@@ -372,6 +372,68 @@ final class AppModel: ObservableObject {
         refreshShow()
     }
 
+    // MARK: - Layout (per Mac, not saved in the show)
+
+    /// Pads fill the window's height (true), or have a fixed height and
+    /// scroll.
+    @Published var fitPadsToWindow: Bool = UserDefaults.standard.object(forKey: "fitPads") as? Bool ?? false {
+        didSet { UserDefaults.standard.set(fitPadsToWindow, forKey: "fitPads") }
+    }
+    /// Pad height when not fitting the window.
+    @Published var padHeight: Double = UserDefaults.standard.object(forKey: "padHeight") as? Double ?? 100 {
+        didSet { UserDefaults.standard.set(padHeight, forKey: "padHeight") }
+    }
+    static let padHeights: ClosedRange<Double> = 50...240
+    /// Now Playing as a strip across the top (true) or a column on the
+    /// right.
+    @Published var nowPlayingOnTop: Bool = UserDefaults.standard.object(forKey: "nowPlayingTop") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(nowPlayingOnTop, forKey: "nowPlayingTop") }
+    }
+    @Published var libraryWidth: Double = UserDefaults.standard.object(forKey: "libraryWidth") as? Double ?? 290 {
+        didSet { UserDefaults.standard.set(libraryWidth, forKey: "libraryWidth") }
+    }
+    @Published var rundownWidth: Double = UserDefaults.standard.object(forKey: "rundownWidth") as? Double ?? 270 {
+        didSet { UserDefaults.standard.set(rundownWidth, forKey: "rundownWidth") }
+    }
+    @Published var nowPlayingWidth: Double = UserDefaults.standard.object(forKey: "nowPlayingWidth") as? Double ?? 280 {
+        didSet { UserDefaults.standard.set(nowPlayingWidth, forKey: "nowPlayingWidth") }
+    }
+
+    func changePadSize(by step: Double) {
+        fitPadsToWindow = false
+        padHeight = min(max(padHeight + step, Self.padHeights.lowerBound), Self.padHeights.upperBound)
+    }
+
+    // MARK: - Live transport
+
+    /// Scrubbing in Now Playing.
+    func seek(_ slot: Int, to seconds: Double) {
+        report { try session.seekCue(slot: slot, seconds: seconds) }
+    }
+
+    /// Scrubbing in the preview player.
+    func seekPreview(to seconds: Double) {
+        report { try session.seekPreview(seconds: seconds) }
+        refreshStatus()
+    }
+
+    /// The most recently fired pad still playing.
+    var lastPad: CueDoc? { status?.last.flatMap { show.cue(at: $0) } }
+
+    func stopLast(fade: Bool) {
+        report { try session.stopLast(fade: fade) }
+        refreshStatus()
+    }
+
+    func isMultiplay(bank: Int) -> Bool {
+        !(status?.singlePlay ?? show.singlePlay).contains(bank)
+    }
+
+    func setMultiplay(bank: Int, _ on: Bool) {
+        report { try session.setBankMultiplay(bank, on) }
+        refreshShow()
+    }
+
     // MARK: - Rundown
 
     /// The step GO fires next (nil when finished).

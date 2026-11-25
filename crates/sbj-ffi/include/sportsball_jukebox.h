@@ -105,9 +105,10 @@ char *sbj_session_show_json(const SbjSession *session);
 
 /* {"game", "preview_output": number|null,
  *  "preview": {"slot" (4294967295 for a library file), "file": string|null,
- *  "playing","position"}|null,
- *  "bank", "standby": index|null,
- *  "learning": "cue:N|stop_all|next_bank|prev_bank|rundown_go"|null,
+ *  "playing","position","duration"}|null,
+ *  "bank", "standby": index|null, "last": slot|null (most recently
+ *  fired pad still playing), "single_play": [bank],
+ *  "learning": "cue:N|stop_all|next_bank|prev_bank|rundown_go|fade_last"|null,
  *  "last_control": string|null, "midi_inputs": [string]|null (null = MIDI off),
  *  "osc_port": number|null, "remote_port": number|null, "dirty", "path",
  *  "outputs": [{"name","status":"running|on_backup|offline",
@@ -126,6 +127,17 @@ SbjStatus sbj_session_save_show(const SbjSession *session, const char *path);
  *  absent = unchanged; changing it reloads, and so stops, every pad)}.
  * Cue slots are bank * slots + pad; resizing keeps each cue's bank/pad. */
 SbjStatus sbj_session_set_show_settings_json(const SbjSession *session, const char *json);
+/* ---- Live transport ---------------------------------------------------- */
+
+/* Move a playing pad's playhead (scrubbing); no-op if it isn't playing. */
+SbjStatus sbj_session_seek_cue(const SbjSession *session, uint32_t slot, double seconds);
+/* Fade out (over its own fade-out) or stop the most recently fired pad
+ * still playing ("last" in the status JSON). */
+SbjStatus sbj_session_stop_last(const SbjSession *session, bool fade);
+/* Multiplay off = single-play: firing a pad fades out the bank's other
+ * pads. Status JSON "single_play" lists banks with Multiplay off. */
+SbjStatus sbj_session_set_bank_multiplay(const SbjSession *session, uint32_t bank, bool multiplay);
+
 /* ---- Library ------------------------------------------------------------ */
 
 /* Settings for new pads: {"color"?, "fade_in"?, "fade_out"?, "loop"?,
@@ -232,6 +244,8 @@ SbjStatus sbj_session_fire_cue(const SbjSession *session, uint32_t slot);
 /* Preview (audition) a pad on the preview output, e.g. headphones, without
  * affecting the main outputs. Previewing the same pad again stops it. */
 SbjStatus sbj_session_preview_cue(const SbjSession *session, uint32_t slot);
+/* Move the preview's playhead (playing it again if it had stopped). */
+SbjStatus sbj_session_seek_preview(const SbjSession *session, double seconds);
 SbjStatus sbj_session_stop_preview(const SbjSession *session);
 /* Output index used for previews; negative = preview off. */
 SbjStatus sbj_session_set_preview_output(const SbjSession *session, int32_t output);

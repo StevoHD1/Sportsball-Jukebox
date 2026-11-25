@@ -62,6 +62,12 @@ struct ScreenshotDirector {
                 await wait(seconds: 1)
                 capture(mainWindow(), "10-library")
                 model.showingLibrary = false
+                if model.canPreview, let slot = model.show.cues.first(where: { !$0.markers.isEmpty })?.slot {
+                    model.preview(slot)
+                    await wait(seconds: 1.5)
+                    capture(mainWindow(), "11-preview")
+                    model.stopPreview()
+                }
                 model.showingRundown = wasShowing
                 mainWindow()?.setContentSize(NSSize(width: 1280, height: 760))
                 await wait(seconds: 0.5)

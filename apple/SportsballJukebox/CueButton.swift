@@ -60,6 +60,7 @@ private let padScheme = "sbjpad"
 struct CueButton: View {
     @EnvironmentObject private var model: AppModel
     let slot: Int
+    var height: CGFloat = 100
     @State private var isDropTarget = false
 
     private let shape = RoundedRectangle(cornerRadius: 10, style: .continuous)
@@ -82,6 +83,7 @@ struct CueButton: View {
             PadFace(
                 cue: cue,
                 image: cue.flatMap { model.padImage(for: $0) },
+                height: height,
                 state: state,
                 hasProblems: !problems.isEmpty,
                 isBusy: isBusy
@@ -196,6 +198,7 @@ struct CueButton: View {
 private struct PadFace: View {
     let cue: CueDoc?
     let image: NSImage?
+    let height: CGFloat
     let state: CueStatus
     let hasProblems: Bool
     let isBusy: Bool
@@ -240,15 +243,15 @@ private struct PadFace: View {
                 Spacer(minLength: 0)
                 Text(cue?.title ?? "Empty")
                     .font(.headline)
-                    .lineLimit(2)
+                    .lineLimit(compact ? 1 : 2)
                     .opacity(cue == nil ? 0.5 : 1)
-                if let song = playlistLine {
+                if let song = playlistLine, !compact {
                     Text(song)
                         .font(.caption)
                         .lineLimit(1)
                         .opacity(0.9)
                 }
-                if let group = cue?.group, !group.isEmpty {
+                if let group = cue?.group, !group.isEmpty, !compact {
                     Text(group.uppercased())
                         .font(.caption2.weight(.semibold))
                         .opacity(0.75)
@@ -260,11 +263,14 @@ private struct PadFace: View {
                 }
             }
             .foregroundStyle(cue == nil ? Color.secondary : Color.white)
-            .padding(10)
+            .padding(compact ? 6 : 10)
         }
-        .frame(height: 100)
+        .frame(height: height)
         .animation(.easeOut(duration: 0.12), value: state.playing)
     }
+
+    /// Small pads show just the key, title and time.
+    private var compact: Bool { height < 84 }
 
     private var topRow: some View {
         HStack(spacing: 6) {

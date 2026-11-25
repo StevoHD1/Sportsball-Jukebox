@@ -46,6 +46,16 @@ struct SportsballJukeboxApp: App {
                     model.showingNowPlaying.toggle()
                 }
                 .keyboardShortcut("p", modifiers: [.command, .shift])
+                Button(model.nowPlayingOnTop ? "Now Playing on the Right" : "Now Playing Across the Top") {
+                    model.nowPlayingOnTop.toggle()
+                }
+                Button(model.fitPadsToWindow ? "Pads: Fixed Size" : "Pads: Fit to Window") {
+                    model.fitPadsToWindow.toggle()
+                }
+                Button("Bigger Pads") { model.changePadSize(by: 10) }
+                    .keyboardShortcut("=", modifiers: [.command])
+                Button("Smaller Pads") { model.changePadSize(by: -10) }
+                    .keyboardShortcut("-", modifiers: [.command])
                 Button("Game Log…") { model.showingLog = true }
                     .keyboardShortcut("l", modifiers: [.command, .shift])
                 Button("Pre-game Check…") {

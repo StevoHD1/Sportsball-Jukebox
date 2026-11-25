@@ -37,6 +37,7 @@ mod playlist;
 mod preview;
 mod remote;
 mod rundown;
+mod transport;
 pub use library::LibraryEntry;
 pub use remote::RemoteError;
 
@@ -351,12 +352,16 @@ pub struct Session<B: AudioBackend> {
     /// When each slot was last fired, so a cue counts as playing before
     /// the audio thread has started it.
     recent_fires: HashMap<u32, Instant>,
+    /// Pads in the order they last started (for Fade Last / Stop Last).
+    fire_order: Vec<u32>,
     playlists: HashMap<u32, playlist::PlaylistState>,
     /// The pad being previewed, and on which output.
     previewing: Option<(u32, usize)>,
     /// The library file being previewed (with `previewing` slot
     /// `preview::FILE_PREVIEW`).
     previewing_file: Option<String>,
+    /// Length of what is being previewed, seconds.
+    preview_length: f64,
     log: log::PlayLog,
 }
 
@@ -384,9 +389,11 @@ impl<B: AudioBackend> Session<B> {
             last_control: None,
             duck_applied: HashMap::new(),
             recent_fires: HashMap::new(),
+            fire_order: Vec::new(),
             playlists: HashMap::new(),
             previewing: None,
             previewing_file: None,
+            preview_length: 0.0,
             log: log::PlayLog::new(),
         }
     }
@@ -509,6 +516,8 @@ impl<B: AudioBackend> Session<B> {
         self.show.slots = slots;
         self.show.columns = columns.clamp(1, 16);
         self.show.banks = banks;
+        let bank_count = self.show.banks.len() as u32;
+        self.show.single_play.retain(|&b| b < bank_count);
         self.current_bank = self.current_bank.min(self.show.banks.len() as u32 - 1);
         self.dirty = true;
         moved.sort_unstable();

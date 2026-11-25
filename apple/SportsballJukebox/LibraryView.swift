@@ -8,6 +8,7 @@ import UniformTypeIdentifiers
 /// headphones.
 struct LibraryView: View {
     @EnvironmentObject private var model: AppModel
+    var width: Double = 290
     @State private var search = ""
     @State private var unusedOnly = false
     @FocusState private var searching: Bool
@@ -80,7 +81,7 @@ struct LibraryView: View {
                 .foregroundStyle(.secondary)
                 .padding(8)
         }
-        .frame(width: 290)
+        .frame(width: width)
         .overlay {
             if isDropTarget {
                 RoundedRectangle(cornerRadius: 8)

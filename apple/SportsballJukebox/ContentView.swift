@@ -9,29 +9,29 @@ struct ContentView: View {
             Divider()
             OutputBanners()
             NoticeToasts()
-            if model.show.banks.count > 1 {
-                BankBar()
+            BankBar()
+            if model.showingNowPlaying && model.nowPlayingOnTop {
+                Divider()
+                NowPlayingStrip()
+                Divider()
             }
             HStack(spacing: 0) {
                 if model.showingLibrary {
-                    LibraryView()
+                    LibraryView(width: model.libraryWidth)
                         .frame(maxHeight: .infinity)
-                    Divider()
+                    ResizeHandle(width: $model.libraryWidth, range: 220...640, direction: 1)
                 } else if model.showingRundown {
-                    RundownView()
+                    RundownView(width: model.rundownWidth)
                         .frame(maxHeight: .infinity)
-                    Divider()
+                    ResizeHandle(width: $model.rundownWidth, range: 220...560, direction: 1)
                 }
-                ScrollView {
-                    PadGrid()
-                        .padding(16)
-                }
-                // Take all the width the panel leaves (without this the
-                // row shrinks to its content and the pads get squeezed).
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                if model.showingNowPlaying {
-                    Divider()
-                    NowPlayingView()
+                PadArea()
+                    // Take all the width the panels leave (without this the
+                    // row shrinks to its content and the pads get squeezed).
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                if model.showingNowPlaying && !model.nowPlayingOnTop {
+                    ResizeHandle(width: $model.nowPlayingWidth, range: 220...520, direction: -1)
+                    NowPlayingView(width: model.nowPlayingWidth)
                         .frame(maxHeight: .infinity)
                 }
             }
@@ -41,6 +41,11 @@ struct ContentView: View {
         }
         .frame(minWidth: 820, minHeight: 480)
         .navigationTitle(model.windowTitle)
+        .overlay(alignment: .bottomTrailing) {
+            PreviewPlayer()
+                .padding(.trailing, 16)
+                .padding(.bottom, 40)
+        }
         .overlay {
             if model.isLoadingShow {
                 ProgressView("Loading show…")
@@ -78,8 +83,36 @@ struct ContentView: View {
     }
 }
 
+/// The pad grid: fitted to the window's height, or at a fixed pad size
+/// with scrolling.
+private struct PadArea: View {
+    @EnvironmentObject private var model: AppModel
+
+    private static let padding: CGFloat = 16
+    private static let spacing: CGFloat = 10
+
+    var body: some View {
+        GeometryReader { viewport in
+            ScrollView {
+                PadGrid(padHeight: padHeight(for: viewport.size.height))
+                    .padding(Self.padding)
+            }
+        }
+    }
+
+    private func padHeight(for height: CGFloat) -> CGFloat {
+        guard model.fitPadsToWindow else { return CGFloat(model.padHeight) }
+        let columns = max(model.show.columns, 1)
+        let rows = max((model.show.slots + columns - 1) / columns, 1)
+        let available = height - 2 * Self.padding - Self.spacing * CGFloat(rows - 1)
+        // Below this, pads scroll rather than shrink further.
+        return max(available / CGFloat(rows), 44)
+    }
+}
+
 private struct PadGrid: View {
     @EnvironmentObject private var model: AppModel
+    let padHeight: CGFloat
 
     var body: some View {
         let columns = Array(
@@ -88,7 +121,7 @@ private struct PadGrid: View {
         )
         LazyVGrid(columns: columns, spacing: 10) {
             ForEach(Array(model.show.padRange(bank: model.currentBank)), id: \.self) { slot in
-                CueButton(slot: slot)
+                CueButton(slot: slot, height: padHeight)
             }
         }
     }
@@ -165,6 +198,26 @@ private struct HeaderBar: View {
             Slider(value: $model.masterVolume, in: 0...1)
                 .frame(width: 160)
                 .help("Master volume")
+
+            Button {
+                model.stopLast(fade: true)
+            } label: {
+                Label("Fade Last", systemImage: "speaker.wave.1")
+            }
+            .keyboardShortcut(.escape, modifiers: [.shift])
+            .disabled(model.lastPad == nil)
+            .help(model.lastPad.map { "Fade out \"\($0.title)\", the last pad fired (⇧Esc)" }
+                ?? "Fade out the last pad fired (⇧Esc)")
+            Button {
+                model.stopLast(fade: false)
+            } label: {
+                Label("Stop Last", systemImage: "stop")
+            }
+            .labelStyle(.iconOnly)
+            .keyboardShortcut(.escape, modifiers: [.option])
+            .disabled(model.lastPad == nil)
+            .help(model.lastPad.map { "Stop \"\($0.title)\", the last pad fired (⌥Esc)" }
+                ?? "Stop the last pad fired (⌥Esc)")
 
             Button(role: .destructive) {
                 model.stopAll()
@@ -260,6 +313,24 @@ private struct NoticeToasts: View {
 private struct BankBar: View {
     @EnvironmentObject private var model: AppModel
 
+    private var multiplay: Binding<Bool> {
+        Binding(
+            get: { model.isMultiplay(bank: model.currentBank) },
+            set: { model.setMultiplay(bank: model.currentBank, $0) }
+        )
+    }
+
+    /// Moving the size slider switches off Fit.
+    private var padHeight: Binding<Double> {
+        Binding(
+            get: { model.padHeight },
+            set: {
+                model.fitPadsToWindow = false
+                model.padHeight = $0
+            }
+        )
+    }
+
     var body: some View {
         HStack(spacing: 6) {
             ForEach(Array(model.show.banks.enumerated()), id: \.offset) { index, name in
@@ -277,13 +348,26 @@ private struct BankBar: View {
                         .foregroundStyle(index == model.currentBank ? Color.white : Color.primary)
                 }
                 .buttonStyle(.plain)
+                .help("Pad keys apply to the bank shown")
                 .accessibilityLabel("Bank \(name)")
                 .accessibilityAddTraits(index == model.currentBank ? .isSelected : [])
             }
             Spacer()
-            Text("Pad keys apply to the bank shown.")
-                .font(.caption)
+            Toggle("Multiplay", isOn: multiplay)
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .help("On: this bank's pads play over each other. Off: firing a pad fades out the bank's other pads.")
+            Divider().frame(height: 18)
+            Toggle("Fit", isOn: $model.fitPadsToWindow)
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .help("Size the pads to fit the window (otherwise they keep their size and scroll)")
+            Image(systemName: "square.grid.3x3")
                 .foregroundStyle(.secondary)
+            Slider(value: padHeight, in: AppModel.padHeights)
+                .frame(width: 110)
+                .controlSize(.small)
+                .help("Pad size (⌘+ / ⌘−)")
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
@@ -338,6 +422,7 @@ private struct ControlFooter: View {
         case "next_bank": return "Next Bank"
         case "prev_bank": return "Previous Bank"
         case "rundown_go": return "Rundown GO"
+        case "fade_last": return "Fade Last"
         default:
             let slot = Int(target.dropFirst(4)) ?? 0
             return model.show.cue(at: slot).map { "\"\($0.title)\"" } ?? "pad"

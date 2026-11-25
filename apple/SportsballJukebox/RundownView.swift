@@ -4,6 +4,7 @@ import SwiftUI
 /// time with GO (or Space). The standby step is highlighted.
 struct RundownView: View {
     @EnvironmentObject private var model: AppModel
+    var width: Double = 270
     @State private var editing: RundownItem?
 
     var body: some View {
@@ -62,7 +63,7 @@ struct RundownView: View {
                 .listStyle(.sidebar)
             }
         }
-        .frame(width: 270)
+        .frame(width: width)
         .sheet(item: $editing) { item in
             RundownTextEditor(item: item) { edited in
                 if edited.id == 0 {

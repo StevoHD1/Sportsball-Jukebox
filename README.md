@@ -5,7 +5,7 @@ as a native macOS app. Inspired by Sports Sounds Pro, it adds
 sample-accurate timeline markers with actions (loop, jump, pause, fade) and
 support for several audio interfaces at once.
 
-**Status:** Phase 12; v0.1.0 is being tested on a Mac. A Mac app with:
+**Status:** Phase 13; v0.2.0 is being tested on a Mac. A Mac app with:
 - a configurable pad grid with hotkeys and colours;
 - show files that autosave;
 - several audio interfaces at once, with automatic failover to a backup;

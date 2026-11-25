@@ -1,6 +1,6 @@
 # Sportsball Jukebox: Architecture
 
-Status: Phase 12 (show building: library, pad looks, styles, defaults). Last updated 2026-11-24.
+Status: Phase 13 (layout and live transport). Last updated 2026-11-24.
 
 ## Goals, in priority order
 
@@ -459,6 +459,26 @@ the pre-game check warns about steps on empty pads.
   by the app when audio is dropped on an empty pad. Settable in Show
   Settings or from a pad (Use Style for New Pads).
 
+## Layout and live transport (Phase 13)
+
+- **Scrubbing:** `Session::seek_cue` moves a playing pad's playhead (the
+  current song for playlists) with the usual declick crossfade; Now
+  Playing's bars are click/drag targets. `seek_preview` does the same for
+  the preview (playing it again if it had ended), and the preview state
+  reports its length, for the floating preview player.
+- **Fade Last / Stop Last:** the session remembers the order pads started
+  (`fire_order`, the last 64); "last" is the most recent one still
+  playing. Buttons (⇧Esc / ⌥Esc), MIDI learn (Fade Last), OSC
+  `/sbj/fadelast` and `/sbj/stoplast`, and the remote.
+- **Multiplay per bank:** on by default (pads overlap). The show's
+  `single_play` lists banks with it off: firing a pad there (by any means
+  but a marker) fades out the bank's other playing pads over the group
+  hand-over time.
+- **Layout (per Mac, not in the show):** pads fit the window's height or
+  keep a chosen size and scroll; Now Playing across the top (default) or
+  on the right; the library, rundown and Now Playing columns are
+  resizable.
+
 ## Play log (Phase 7)
 
 `sbj-session/src/log.rs` records each time a pad or playlist song starts:
@@ -621,6 +641,12 @@ CI.
   onto pads or into a pad's timeline).
 - Custom pad colours and pictures; Copy/Paste Style; defaults for new
   pads.
+
+**Phase 13: Layout and live transport (built; awaiting Mac testing)**
+- Pads fit the window or keep a size and scroll; Now Playing across the
+  top; resizable side panels.
+- Scrub bars in Now Playing; floating preview player with scrubbing.
+- Fade Last / Stop Last; Multiplay switch per bank.
 
 **Next candidates**
 - Signed releases once there is a Developer account.

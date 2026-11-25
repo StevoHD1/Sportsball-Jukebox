@@ -36,6 +36,8 @@ struct ShowDoc: Codable, Equatable {
     var library: [String] = []
     /// Settings for new pads; nil = built-in.
     var padDefaults: PadDefaults?
+    /// Banks (0-based) with Multiplay off.
+    var singlePlay: [Int] = []
 
     enum CodingKeys: String, CodingKey {
         case format, version, name, slots, columns, banks, outputs, cues, controls
@@ -45,6 +47,7 @@ struct ShowDoc: Codable, Equatable {
         case levelMatch = "level_match"
         case rundown, library
         case padDefaults = "pad_defaults"
+        case singlePlay = "single_play"
     }
 
     /// Global slot numbers of a bank's pads.
@@ -71,6 +74,7 @@ struct ShowDoc: Codable, Equatable {
         rundown = try c.value(.rundown, or: [])
         library = try c.value(.library, or: [])
         padDefaults = try c.decodeIfPresent(PadDefaults.self, forKey: .padDefaults)
+        singlePlay = try c.value(.singlePlay, or: [])
         outputs = try c.value(.outputs, or: outputs)
         cues = try c.value(.cues, or: cues)
     }
@@ -113,12 +117,14 @@ struct ControlsDoc: Codable, Equatable {
     var nextBank: MidiTrigger?
     var prevBank: MidiTrigger?
     var rundownGo: MidiTrigger?
+    var fadeLast: MidiTrigger?
 
     enum CodingKeys: String, CodingKey {
         case stopAll = "stop_all"
         case nextBank = "next_bank"
         case prevBank = "prev_bank"
         case rundownGo = "rundown_go"
+        case fadeLast = "fade_last"
     }
 }
 
@@ -539,12 +545,17 @@ struct PreviewInfo: Decodable, Equatable {
     var file: String?
     var playing: Bool
     var position: Double
+    var duration: Double
 }
 
 struct SessionStatus: Decodable, Equatable {
     var game: String
     /// Rundown step GO fires next; nil when finished.
     var standby: Int?
+    /// The most recently fired pad still playing (Fade Last / Stop Last).
+    var last: Int?
+    /// Banks with Multiplay off.
+    var singlePlay: [Int]
     var previewOutput: Int?
     var preview: PreviewInfo?
     var bank: Int

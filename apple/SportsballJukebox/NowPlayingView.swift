@@ -1,10 +1,12 @@
 import SwiftUI
 
 /// Sidebar listing everything playing, soonest to end first: a big
-/// countdown, what comes next (marker or playlist song), and per-row
-/// stop and fade. Also shows the headphone preview.
+/// countdown, a bar to click or drag to skip around, what comes next
+/// (marker or playlist song), and per-row stop and fade. (The headphone
+/// preview has its own player, `PreviewPlayer`.)
 struct NowPlayingView: View {
     @EnvironmentObject private var model: AppModel
+    var width: Double = 280
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -19,9 +21,6 @@ struct NowPlayingView: View {
             Divider()
             ScrollView {
                 VStack(spacing: 8) {
-                    if let preview = model.status?.preview, preview.playing {
-                        PreviewRow(preview: preview)
-                    }
                     if model.nowPlaying.isEmpty {
                         Text("Nothing playing")
                             .foregroundStyle(.secondary)
@@ -35,7 +34,44 @@ struct NowPlayingView: View {
                 .padding(10)
             }
         }
-        .frame(width: 280)
+        .frame(width: width)
+        .background(Color.black.opacity(0.12))
+    }
+}
+
+/// Now Playing as a strip across the top of the window: one card per
+/// playing pad, soonest to end first, scrolling sideways.
+struct NowPlayingStrip: View {
+    @EnvironmentObject private var model: AppModel
+
+    var body: some View {
+        HStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Now Playing").font(.headline)
+                Text("\(model.nowPlaying.count)")
+                    .font(.title2.monospacedDigit().weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .frame(width: 96, alignment: .leading)
+            .padding(.leading, 16)
+            ScrollView(.horizontal) {
+                HStack(spacing: 8) {
+                    if model.nowPlaying.isEmpty {
+                        Text("Nothing playing")
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 8)
+                    }
+                    ForEach(model.nowPlaying) { item in
+                        NowPlayingRow(cue: item.cue, state: item.state, compact: true)
+                            .frame(width: 250)
+                    }
+                }
+                .padding(.vertical, 8)
+                .padding(.horizontal, 8)
+            }
+        }
+        // Fixed height, so the pads don't jump when something starts.
+        .frame(height: 112)
         .background(Color.black.opacity(0.12))
     }
 }
@@ -44,6 +80,7 @@ private struct NowPlayingRow: View {
     @EnvironmentObject private var model: AppModel
     let cue: CueDoc
     let state: CueStatus
+    var compact = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -68,10 +105,12 @@ private struct NowPlayingRow: View {
                 .help("Stop")
             }
             Text(bigText)
-                .font(.system(size: 30, weight: .semibold, design: .rounded).monospacedDigit())
+                .font(.system(size: compact ? 22 : 30, weight: .semibold, design: .rounded).monospacedDigit())
                 .foregroundStyle(isEnding ? Color.red : Color.primary)
-            ProgressView(value: state.progress)
-                .tint(isEnding ? .red : .green)
+            // Click or drag to skip ahead (or back) in the pad.
+            ScrubBar(progress: state.progress, duration: state.duration, tint: isEnding ? .red : .green) {
+                model.seek(cue.slot, to: $0)
+            }
             if let next = nextText {
                 Text(next)
                     .font(.caption)
@@ -114,36 +153,83 @@ private struct NowPlayingRow: View {
     }
 }
 
-private struct PreviewRow: View {
+/// Floating mini player shown while previewing (a pad or a library file)
+/// in the headphones: scrub to any point, restart, stop.
+struct PreviewPlayer: View {
     @EnvironmentObject private var model: AppModel
-    let preview: PreviewInfo
 
-    private var title: String {
+    var body: some View {
+        if let preview = model.status?.preview {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    Image(systemName: "headphones")
+                        .foregroundStyle(.blue)
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text("Preview")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Text(title(preview))
+                            .font(.headline)
+                            .lineLimit(1)
+                    }
+                    Spacer()
+                    Button {
+                        model.stopPreview()
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                    }
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(.secondary)
+                    .help("Stop and close")
+                }
+                ScrubBar(
+                    progress: preview.duration > 0 ? preview.position / preview.duration : 0,
+                    duration: preview.duration,
+                    tint: .blue
+                ) {
+                    model.seekPreview(to: $0)
+                }
+                HStack {
+                    Text(formatTime(preview.position))
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button {
+                        model.seekPreview(to: 0)
+                    } label: {
+                        Image(systemName: "backward.end.fill")
+                    }
+                    .help("Play from the start")
+                    Button {
+                        if preview.playing {
+                            model.stopPreview()
+                        } else {
+                            model.seekPreview(to: preview.position)
+                        }
+                    } label: {
+                        Image(systemName: preview.playing ? "stop.fill" : "play.fill")
+                    }
+                    .help(preview.playing ? "Stop" : "Play")
+                    Spacer()
+                    Text("-" + formatTime(max(preview.duration - preview.position, 0)))
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.borderless)
+            }
+            .padding(12)
+            .frame(width: 320)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+            .shadow(radius: 10)
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("Preview player")
+        }
+    }
+
+    private func title(_ preview: PreviewInfo) -> String {
         if let file = preview.file {
             return URL(fileURLWithPath: file).deletingPathExtension().lastPathComponent
         }
-        return model.show.cue(at: preview.slot)?.title ?? "pad"
-    }
-
-    var body: some View {
-        HStack {
-            Image(systemName: "headphones")
-            VStack(alignment: .leading) {
-                Text("Preview: \(title)")
-                    .lineLimit(1)
-                Text(formatTime(preview.position))
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
-            }
-            Spacer()
-            Button {
-                model.stopPreview()
-            } label: {
-                Image(systemName: "stop.fill")
-            }
-            .buttonStyle(.borderless)
-        }
-        .padding(10)
-        .background(Color.blue.opacity(0.2), in: RoundedRectangle(cornerRadius: 8))
+        return model.show.cue(at: preview.slot)?.title ?? "Pad"
     }
 }
