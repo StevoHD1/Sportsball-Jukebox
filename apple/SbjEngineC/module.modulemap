@@ -1,0 +1,5 @@
+// Exposes the Rust engine's C API to Swift as `import SbjEngineC`.
+module SbjEngineC {
+    header "../../crates/sbj-ffi/include/sportsball_jukebox.h"
+    export *
+}

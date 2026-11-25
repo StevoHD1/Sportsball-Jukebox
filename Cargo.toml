@@ -12,6 +12,9 @@ publish = false
 rtrb = "0.4.1"
 sbj-engine = { path = "crates/sbj-engine" }
 sbj-backend = { path = "crates/sbj-backend" }
+sbj-media = { path = "crates/sbj-media" }
+sbj-session = { path = "crates/sbj-session" }
+sbj-control = { path = "crates/sbj-control" }
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"

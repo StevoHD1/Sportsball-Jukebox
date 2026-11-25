@@ -1,45 +1,202 @@
 /* Compiles against the public header and links the static library, so CI
- * catches any drift between the header and the Rust exports. */
+ * catches drift between the header and the Rust exports. Works with or
+ * without an audio device (CI machines usually have none). */
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include "sportsball_jukebox.h"
 
-#define CHECK(cond)                                                    \
-    do {                                                               \
-        if (!(cond)) {                                                 \
-            fprintf(stderr, "smoke test failed: %s (line %d)\n", #cond, \
-                    __LINE__);                                         \
-            return 1;                                                  \
-        }                                                              \
+#define CHECK(cond)                                                     \
+    do {                                                                \
+        if (!(cond)) {                                                  \
+            char msg[256];                                              \
+            sbj_last_error_message(msg, sizeof msg);                    \
+            fprintf(stderr, "smoke test failed: %s (line %d): %s\n",    \
+                    #cond, __LINE__, msg);                              \
+            return 1;                                                   \
+        }                                                               \
     } while (0)
+
+static void put_u16(FILE *f, uint16_t v) { fputc(v & 0xff, f); fputc(v >> 8, f); }
+static void put_u32(FILE *f, uint32_t v) { put_u16(f, v & 0xffff); put_u16(f, v >> 16); }
+
+/* Writes a 0.1 s mono 16-bit 44.1 kHz WAV of a square wave. */
+static int write_wav(const char *path) {
+    FILE *f = fopen(path, "wb");
+    if (!f) return 0;
+    const uint32_t frames = 4410, data = frames * 2;
+    fwrite("RIFF", 1, 4, f); put_u32(f, 36 + data);
+    fwrite("WAVEfmt ", 1, 8, f); put_u32(f, 16);
+    put_u16(f, 1); put_u16(f, 1); put_u32(f, 44100); put_u32(f, 88200);
+    put_u16(f, 2); put_u16(f, 16);
+    fwrite("data", 1, 4, f); put_u32(f, data);
+    for (uint32_t i = 0; i < frames; i++) put_u16(f, (i / 50) % 2 ? 8000 : (uint16_t)-8000);
+    fclose(f);
+    return 1;
+}
 
 int main(void) {
     printf("sportsball jukebox engine %s\n", sbj_version());
+    CHECK(sbj_abi_check(sizeof(SbjDeviceInfo), sizeof(SbjCueState)));
 
-    SbjEngine *engine = sbj_engine_create(48000, 2);
-    CHECK(engine != NULL);
-    CHECK(sbj_engine_load_test_tone(engine, 440.0f, 0.5f) == SBJ_STATUS_OK);
-    CHECK(sbj_engine_play(engine) == SBJ_STATUS_OK);
-
-    float out[256 * 2];
-    int heard = 0;
-    for (int block = 0; block < 10; block++) {
-        CHECK(sbj_engine_render(engine, out, 256) == SBJ_STATUS_OK);
-        for (int i = 0; i < 256 * 2; i++) {
-            if (out[i] != 0.0f) heard = 1;
-        }
+    SbjSession *s = sbj_session_create();
+    CHECK(s != NULL);
+    char backend[64];
+    CHECK(sbj_session_backend_name(s, backend, sizeof backend) == SBJ_STATUS_OK);
+    uint32_t devices = sbj_session_device_count(s);
+    printf("backend %s, %u output device(s)\n", backend, devices);
+    for (uint32_t i = 0; i < devices; i++) {
+        SbjDeviceInfo info;
+        CHECK(sbj_session_device_info(s, i, &info) == SBJ_STATUS_OK);
+        printf("  %s%s (%u ch @ %u Hz)\n", info.name, info.is_default ? " [default]" : "",
+               info.output_channels, info.sample_rate);
     }
-    CHECK(heard);
-    CHECK(sbj_engine_position(engine) == 2560);
+    CHECK(sbj_session_open_outputs(s) == SBJ_STATUS_OK);
+    CHECK(sbj_session_set_master_gain(s, 0.0f) == SBJ_STATUS_OK); /* stay quiet */
 
-    CHECK(sbj_engine_seek(engine, 100) == SBJ_STATUS_OK);
-    CHECK(sbj_engine_pause(engine) == SBJ_STATUS_OK);
-    CHECK(sbj_engine_render(engine, out, 256) == SBJ_STATUS_OK);
-    CHECK(sbj_engine_position(engine) == 100);
-    CHECK(sbj_engine_stop(engine) == SBJ_STATUS_OK);
-    CHECK(sbj_engine_play(NULL) == SBJ_STATUS_NULL_POINTER);
+    /* Audio + cue */
+    const char *wav = "sbj_smoke_test.wav";
+    CHECK(write_wav(wav));
+    double duration = 0;
+    CHECK(sbj_session_load_sound(s, wav, &duration) == SBJ_STATUS_OK);
+    CHECK(duration > 0.099 && duration < 0.101);
+    float peaks[2 * 8];
+    CHECK(sbj_session_waveform(s, wav, 8, peaks) == SBJ_STATUS_OK);
+    char *info = sbj_session_sound_info_json(s, wav);
+    CHECK(info != NULL && strstr(info, "\"loudness\"") != NULL);
+    printf("sound info: %s\n", info);
+    sbj_string_free(info);
+    (void)sbj_session_seek_cue(s, 3, 0.05); /* NO_OUTPUT where there is no device */
+    CHECK(sbj_session_seek_preview(s, 0.0) == SBJ_STATUS_OK); /* nothing previewing: no-op */
+    CHECK(sbj_session_stop_last(s, true) == SBJ_STATUS_OK);
+    CHECK(sbj_session_set_bank_multiplay(s, 0, false) == SBJ_STATUS_OK);
+    CHECK(sbj_session_set_bank_multiplay(s, 0, true) == SBJ_STATUS_OK);
+    CHECK(sbj_session_set_pad_defaults_json(s, "{\"color\":\"#ff0000\",\"fade_in\":0.5}")
+          == SBJ_STATUS_OK);
+    CHECK(sbj_session_set_pad_defaults_json(s, "{\"fade_in\":\"x\"}") == SBJ_STATUS_INVALID_ARGUMENT);
+    CHECK(sbj_session_set_pad_defaults_json(s, NULL) == SBJ_STATUS_OK);
+    char add[512];
+    snprintf(add, sizeof add, "[\"%s\", \"elsewhere.wav\"]", wav);
+    CHECK(sbj_session_add_to_library_json(s, add) == SBJ_STATUS_OK);
+    char *library = sbj_session_library_json(s);
+    CHECK(library != NULL && strstr(library, "elsewhere.wav") != NULL);
+    sbj_string_free(library);
+    CHECK(sbj_session_remove_from_library(s, "elsewhere.wav") == SBJ_STATUS_OK);
+    char *where = sbj_session_resolve_file(s, wav);
+    CHECK(where != NULL);
+    sbj_string_free(where);
+    CHECK(sbj_session_resolve_file(s, "no-such-file.png") == NULL);
+    CHECK(sbj_session_preview_file(s, wav) != SBJ_STATUS_OK); /* no preview output set */
+    char *none = sbj_session_sound_info_json(s, "not-loaded.wav");
+    CHECK(none != NULL && strcmp(none, "null") == 0);
+    sbj_string_free(none);
+    CHECK(peaks[0] < -0.2f && peaks[1] > 0.2f);
 
-    sbj_engine_destroy(engine);
+    char cue[512];
+    snprintf(cue, sizeof cue,
+             "{\"slot\":3,\"title\":\"Square\",\"hotkey\":\"q\",\"loop\":true,"
+             "\"clips\":[{\"file\":\"%s\"}],"
+             "\"markers\":[{\"id\":1,\"name\":\"half\",\"time\":0.05,"
+             "\"action\":{\"kind\":\"fade_out\",\"seconds\":0.02}}]}",
+             wav);
+    CHECK(sbj_session_set_cue_json(s, cue) == SBJ_STATUS_OK);
+
+    SbjCueState states[4];
+    CHECK(sbj_session_cue_states(s, 0, 4, states) == SBJ_STATUS_OK);
+    CHECK(states[3].assigned && states[3].looping && !states[3].playing);
+
+    if (states[3].ready) {
+        CHECK(sbj_session_fire_cue(s, 3) == SBJ_STATUS_OK);
+        CHECK(sbj_session_play_cue_from(s, 3, 0.02) == SBJ_STATUS_OK);
+        CHECK(sbj_session_stop_cue(s, 3, 0.01) == SBJ_STATUS_OK);
+        CHECK(sbj_session_stop_all(s, 0.05) == SBJ_STATUS_OK);
+        printf("played through a real device\n");
+    } else {
+        printf("no usable output device; skipping playback\n");
+        CHECK(sbj_session_fire_cue(s, 3) == SBJ_STATUS_NO_OUTPUT);
+    }
+    CHECK(sbj_session_poll(s) == SBJ_STATUS_OK);
+
+    /* Show documents */
+    char *json = sbj_session_show_json(s);
+    CHECK(json != NULL && strstr(json, "\"Square\"") != NULL);
+    sbj_string_free(json);
+    char *status = sbj_session_status_json(s);
+    CHECK(status != NULL && strstr(status, "\"dirty\":true") != NULL);
+    printf("status: %s\n", status);
+    sbj_string_free(status);
+
+    const char *show_path = "sbj_smoke_test.sbjshow";
+    CHECK(sbj_session_set_show_settings_json(
+              s, "{\"name\":\"Smoke\",\"slots\":12,\"columns\":6,"
+                 "\"banks\":[\"Pregame\",\"Game\"]}") == SBJ_STATUS_OK);
+    CHECK(sbj_session_set_rundown_json(s, "[{\"id\":1,\"text\":\"Intro\"},{\"id\":2,\"pad\":3}]")
+          == SBJ_STATUS_OK);
+    CHECK(sbj_session_set_rundown_json(s, "[{\"id\":1},{\"id\":1}]") == SBJ_STATUS_SHOW_ERROR);
+    CHECK(sbj_session_set_standby(s, 0) == SBJ_STATUS_OK);
+    CHECK(sbj_session_step_standby(s, true) == SBJ_STATUS_OK);
+    CHECK(sbj_session_step_standby(s, false) == SBJ_STATUS_OK);
+    SbjStatus go = sbj_session_rundown_go(s); /* no device on Linux CI */
+    CHECK(go == SBJ_STATUS_OK || go == SBJ_STATUS_NO_OUTPUT);
+    if (go == SBJ_STATUS_OK) {
+        CHECK(sbj_session_rundown_go(s) == SBJ_STATUS_OK); /* finished: no-op */
+    }
+    CHECK(sbj_session_set_bank(s, 1) == SBJ_STATUS_OK);
+    CHECK(sbj_session_set_bank(s, 2) == SBJ_STATUS_SHOW_ERROR);
+    CHECK(sbj_session_learn_midi(s, "cue:3") == SBJ_STATUS_OK);
+    CHECK(sbj_session_learn_midi(s, NULL) == SBJ_STATUS_OK);
+    CHECK(sbj_session_learn_midi(s, "bogus") == SBJ_STATUS_INVALID_ARGUMENT);
+    CHECK(sbj_session_clear_midi(s, "stop_all") == SBJ_STATUS_OK);
+    CHECK(sbj_session_enable_midi(s, true) == SBJ_STATUS_OK);
+    CHECK(sbj_session_set_osc_port(s, 0) == SBJ_STATUS_OK);
+    CHECK(sbj_session_set_remote(s, 0, NULL) == SBJ_STATUS_OK);
+    CHECK(sbj_session_set_remote(s, 1, "12") == SBJ_STATUS_INVALID_ARGUMENT);
+    char *preflight = sbj_session_preflight_json(s);
+    CHECK(preflight != NULL && strstr(preflight, "\"checks\"") != NULL);
+    printf("preflight: %s\n", preflight);
+    sbj_string_free(preflight);
+    CHECK(sbj_session_enable_midi(s, false) == SBJ_STATUS_OK);
+    CHECK(sbj_session_save_show(s, show_path) == SBJ_STATUS_OK);
+    (void)sbj_session_record_undo(s, "Smoke");
+    CHECK(sbj_session_undo(s) == SBJ_STATUS_OK);
+    CHECK(sbj_session_redo(s) == SBJ_STATUS_OK);
+    CHECK(sbj_session_save_with_audio(s, "sbj_smoke_collect/Collected.sbjshow") == SBJ_STATUS_OK);
+    FILE *collected = fopen("sbj_smoke_collect/Audio/sbj_smoke_test.wav", "rb");
+    CHECK(collected != NULL);
+    fclose(collected);
+    CHECK(sbj_session_new_show(s) == SBJ_STATUS_OK);
+    CHECK(sbj_session_cue_states(s, 3, 1, states) == SBJ_STATUS_OK && !states[0].assigned);
+    CHECK(sbj_session_open_show(s, show_path) == SBJ_STATUS_OK);
+    CHECK(sbj_session_cue_states(s, 3, 1, states) == SBJ_STATUS_OK && states[0].assigned);
+    CHECK(sbj_session_skip_cue(s, 3) == SBJ_STATUS_OK || sbj_session_skip_cue(s, 3) == SBJ_STATUS_NO_OUTPUT);
+    CHECK(sbj_session_set_preview_output(s, 5) == SBJ_STATUS_INVALID_ARGUMENT);
+    CHECK(sbj_session_set_preview_output(s, 0) == SBJ_STATUS_OK);
+    CHECK(sbj_session_preview_cue(s, 3) == SBJ_STATUS_OK ||
+          sbj_session_preview_cue(s, 3) == SBJ_STATUS_NO_OUTPUT);
+    CHECK(sbj_session_stop_preview(s) == SBJ_STATUS_OK);
+    CHECK(sbj_session_set_preview_output(s, -1) == SBJ_STATUS_OK);
+    CHECK(sbj_session_set_game(s, "Smoke vs. Test") == SBJ_STATUS_OK);
+    CHECK(sbj_session_set_log_dir(s, NULL) == SBJ_STATUS_OK);
+    char *log = sbj_session_log_json(s);
+    CHECK(log != NULL && strstr(log, "\"entries\"") != NULL);
+    sbj_string_free(log);
+    CHECK(sbj_session_clear_log(s) == SBJ_STATUS_OK);
+    CHECK(sbj_session_move_cue(s, 3, 4) == SBJ_STATUS_OK);
+    CHECK(sbj_session_remove_cue(s, 4) == SBJ_STATUS_OK);
+    CHECK(sbj_session_set_outputs_json(s, "[{\"name\":\"Main\"},{\"name\":\"Lobby\"}]") ==
+          SBJ_STATUS_OK);
+    remove(show_path);
+    remove(wav);
+    remove("sbj_smoke_collect/Audio/sbj_smoke_test.wav");
+    remove("sbj_smoke_collect/Audio");
+    remove("sbj_smoke_collect/Collected.sbjshow");
+    remove("sbj_smoke_collect");
+
+    CHECK(sbj_session_open_show(s, "missing.sbjshow") == SBJ_STATUS_SHOW_ERROR);
+    CHECK(sbj_session_fire_cue(s, 999) == SBJ_STATUS_INVALID_ARGUMENT);
+    CHECK(sbj_session_fire_cue(NULL, 0) == SBJ_STATUS_NULL_POINTER);
+
+    sbj_session_destroy(s);
     printf("ok\n");
     return 0;
 }

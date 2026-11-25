@@ -1,0 +1,22 @@
+[package]
+name = "sbj-control"
+description = "MIDI and OSC listeners that feed control messages to a Sportsball Jukebox session."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+sbj-session.workspace = true
+rosc = "0.11.4"
+
+# CoreMIDI (macOS) / WinMM (Windows). Not built on Linux (needs ALSA).
+[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
+midir = "0.11.1"
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+sbj-backend.workspace = true
+sbj-engine.workspace = true

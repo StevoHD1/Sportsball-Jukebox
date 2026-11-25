@@ -1,0 +1,21 @@
+[package]
+name = "sbj-session"
+description = "Sportsball Jukebox app model: cues, output device, firing. What the UI talks to."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+sbj-engine.workspace = true
+sbj-backend.workspace = true
+sbj-media.workspace = true
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+
+[dev-dependencies]
+serde_json = "1.0.154"
+tempfile = "3"
+
+[lints]
+workspace = true

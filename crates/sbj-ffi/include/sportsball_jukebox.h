@@ -1,16 +1,24 @@
 /*
  * Sportsball Jukebox engine C API.
  *
- * Keep in sync with crates/sbj-ffi/src/lib.rs. Positions are in sample
- * frames at the engine's sample rate. Audio buffers are interleaved float32.
+ * Keep in sync with crates/sbj-ffi/src/lib.rs.
  *
- * Threading: a handle may be used from one thread at a time. In Phase 0 the
- * caller pulls audio with sbj_engine_render; from Phase 1 the engine owns
- * its Core Audio stream and render is only used for offline work.
+ * Conventions:
+ *  - Functions returning SbjStatus report failures there; the reason is
+ *    available from sbj_last_error_message() on the same thread.
+ *  - All functions tolerate NULL handles (SBJ_STATUS_NULL_POINTER).
+ *  - A session may be used from any thread. Slow work (decoding audio)
+ *    happens outside its lock, so it never blocks firing cues; still, call
+ *    the functions marked SLOW off the main thread.
+ *  - Shows, cues and outputs cross as JSON in the show-file schema
+ *    (crates/sbj-session/src/show.rs). Returned strings must be freed with
+ *    sbj_string_free().
+ *  - Strings are NUL-terminated UTF-8. Times are in seconds.
  */
 #ifndef SPORTSBALL_JUKEBOX_H
 #define SPORTSBALL_JUKEBOX_H
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -24,28 +32,246 @@ typedef enum SbjStatus {
     SBJ_STATUS_INVALID_ARGUMENT = 2,
     SBJ_STATUS_QUEUE_FULL = 3,
     SBJ_STATUS_INTERNAL_ERROR = 4,
+    SBJ_STATUS_NO_OUTPUT = 5,   /* the cue's output device is not available */
+    SBJ_STATUS_DEVICE_ERROR = 6,
+    SBJ_STATUS_MEDIA_ERROR = 7,
+    SBJ_STATUS_TRUNCATED = 8,
+    SBJ_STATUS_SHOW_ERROR = 9,  /* show file unreadable or change invalid */
 } SbjStatus;
 
-typedef struct SbjEngine SbjEngine;
+#define SBJ_ID_LEN 512
+#define SBJ_NAME_LEN 256
 
-/* Library version, static string. */
+typedef struct SbjDeviceInfo {
+    char id[SBJ_ID_LEN];     /* persistent; use in output JSON */
+    char name[SBJ_NAME_LEN]; /* for display */
+    uint16_t output_channels;
+    uint32_t sample_rate;
+    bool is_default;
+} SbjDeviceInfo;
+
+typedef struct SbjCueState {
+    bool assigned;  /* the pad has a cue */
+    bool playing;
+    bool looping;
+    bool ready;     /* loaded on an open output: can fire */
+    bool holding;   /* vamping: firing again lets it continue */
+    uint32_t item;  /* playlist pads: current song index, UINT32_MAX if none */
+    uint32_t next_item; /* playlist pads: song played next, UINT32_MAX if none */
+    double position_seconds;
+    double duration_seconds;
+} SbjCueState;
+
+typedef struct SbjSession SbjSession;
+
+/* ---- General ---------------------------------------------------------- */
+
 const char *sbj_version(void);
 
-/* Returns NULL on invalid arguments. Free with sbj_engine_destroy. */
-SbjEngine *sbj_engine_create(uint32_t sample_rate, uint16_t channels);
-void sbj_engine_destroy(SbjEngine *engine);
+/* Copies the last error message on this thread into buf (NUL-terminated
+ * when len > 0). Returns the full message length, excluding the NUL. */
+size_t sbj_last_error_message(char *buf, size_t len);
 
-/* Temporary: loads a timeline with one sine-wave clip. */
-SbjStatus sbj_engine_load_test_tone(SbjEngine *engine, float frequency_hz, float seconds);
+/* Frees a string returned by this library. */
+void sbj_string_free(char *s);
 
-SbjStatus sbj_engine_play(SbjEngine *engine);
-SbjStatus sbj_engine_pause(SbjEngine *engine);
-SbjStatus sbj_engine_stop(SbjEngine *engine);
-SbjStatus sbj_engine_seek(SbjEngine *engine, uint64_t position);
-uint64_t sbj_engine_position(const SbjEngine *engine);
+/* True if this header's struct layouts match the library's. Call at
+ * startup: sbj_abi_check(sizeof(SbjDeviceInfo), sizeof(SbjCueState)). */
+bool sbj_abi_check(size_t device_info_size, size_t cue_state_size);
 
-/* `out` must hold frames * channels floats. */
-SbjStatus sbj_engine_render(SbjEngine *engine, float *out, size_t frames);
+/* ---- Session ---------------------------------------------------------- */
+
+/* Starts with an empty show and no devices open. */
+SbjSession *sbj_session_create(void);
+void sbj_session_destroy(SbjSession *session);
+
+/* Opens every output's device (preferred, else backup, else default). */
+SbjStatus sbj_session_open_outputs(const SbjSession *session);
+
+/* Housekeeping and automatic device failover: call every ~30 ms. */
+SbjStatus sbj_session_poll(const SbjSession *session);
+
+SbjStatus sbj_session_backend_name(const SbjSession *session, char *buf, size_t len);
+
+/* Re-scans devices; then read each with sbj_session_device_info. */
+uint32_t sbj_session_device_count(const SbjSession *session);
+SbjStatus sbj_session_device_info(const SbjSession *session, uint32_t index,
+                                  SbjDeviceInfo *out);
+
+/* ---- Show ------------------------------------------------------------- */
+
+/* The show document as JSON. Free with sbj_string_free. */
+char *sbj_session_show_json(const SbjSession *session);
+
+/* {"game", "preview_output": number|null,
+ *  "preview": {"slot" (4294967295 for a library file), "file": string|null,
+ *  "playing","position","duration"}|null,
+ *  "bank", "standby": index|null, "undo": label|null, "redo": label|null, "last": slot|null (most recently
+ *  fired pad still playing), "single_play": [bank],
+ *  "learning": "cue:N|stop_all|next_bank|prev_bank|rundown_go|fade_last"|null,
+ *  "last_control": string|null, "midi_inputs": [string]|null (null = MIDI off),
+ *  "osc_port": number|null, "remote_port": number|null, "dirty", "path",
+ *  "outputs": [{"name","status":"running|on_backup|offline",
+ *  "device_id","device_name","sample_rate","channels","xruns","error"}],
+ *  "problems": [{"slot","message"}], "notices": [string]}.
+ * Notices are delivered once. Free with sbj_string_free. */
+char *sbj_session_status_json(const SbjSession *session);
+
+SbjStatus sbj_session_new_show(const SbjSession *session);
+/* SLOW: decodes all audio. Current show is untouched on failure. */
+SbjStatus sbj_session_open_show(const SbjSession *session, const char *path);
+/* path NULL = the show's current file. Writes atomically. */
+SbjStatus sbj_session_save_show(const SbjSession *session, const char *path);
+/* SLOW: save to path with copies of every file the show uses in Audio/ and
+ * Images/ beside it, pointing the show at them (relative paths), so the
+ * folder is self-contained. Pads keep firing while it copies. Missing
+ * files are skipped and reported as a notice. */
+SbjStatus sbj_session_save_with_audio(const SbjSession *session, const char *path);
+
+/* Undo: the app marks each user action as a step (label e.g. "Paste
+ * Style"); returns true if the show changed since the last mark. Undo and
+ * redo reload only the pads that changed. Status JSON "undo"/"redo" name
+ * the steps (null if none). Opening or creating a show clears them. */
+bool sbj_session_record_undo(const SbjSession *session, const char *label);
+SbjStatus sbj_session_undo(const SbjSession *session);
+SbjStatus sbj_session_redo(const SbjSession *session);
+/* {"name", "slots" (pads per bank), "columns", "banks": [names],
+ *  "stop_all_fade"?: seconds, "level_match"?: LUFS|null (null = off;
+ *  absent = unchanged; changing it reloads, and so stops, every pad)}.
+ * Cue slots are bank * slots + pad; resizing keeps each cue's bank/pad. */
+SbjStatus sbj_session_set_show_settings_json(const SbjSession *session, const char *json);
+/* ---- Live transport ---------------------------------------------------- */
+
+/* Move a playing pad's playhead (scrubbing); no-op if it isn't playing. */
+SbjStatus sbj_session_seek_cue(const SbjSession *session, uint32_t slot, double seconds);
+/* Fade out (over its own fade-out) or stop the most recently fired pad
+ * still playing ("last" in the status JSON). */
+SbjStatus sbj_session_stop_last(const SbjSession *session, bool fade);
+/* Multiplay off = single-play: firing a pad fades out the bank's other
+ * pads. Status JSON "single_play" lists banks with Multiplay off. */
+SbjStatus sbj_session_set_bank_multiplay(const SbjSession *session, uint32_t bank, bool multiplay);
+
+/* ---- Library ------------------------------------------------------------ */
+
+/* Settings for new pads: {"color"?, "fade_in"?, "fade_out"?, "loop"?,
+ * "group"?, "output"?, "duck"?, "trim_silence"?, "level_match"?}
+ * (the show file's "pad_defaults"); NULL or "null" = built-in. The app
+ * applies them when it creates a pad. */
+SbjStatus sbj_session_set_pad_defaults_json(const SbjSession *session, const char *json);
+
+/* [{"file", "used_by": [slot], "loaded", "duration": s|null,
+ *   "loudness": LUFS|null, "error": string|null}]. Library = files kept
+ * with the show ("library") plus every file a pad uses. Free with
+ * sbj_string_free. */
+char *sbj_session_library_json(const SbjSession *session);
+/* JSON array of file paths; not decoded until used or previewed. */
+SbjStatus sbj_session_add_to_library_json(const SbjSession *session, const char *json);
+/* Refused (SHOW_ERROR) while a pad uses the file. */
+SbjStatus sbj_session_remove_from_library(const SbjSession *session, const char *file);
+/* SLOW the first time (decodes): play a file on the preview output;
+ * again stops it. */
+SbjStatus sbj_session_preview_file(const SbjSession *session, const char *file);
+/* Where a file the show refers to is (also looks in the show's Audio and
+ * Images folders); NULL if not found. Free with sbj_string_free. */
+char *sbj_session_resolve_file(const SbjSession *session, const char *file);
+
+/* ---- Rundown ------------------------------------------------------------ */
+
+/* JSON array of steps [{"id", "pad"?: slot, "text"?: string}]; a step
+ * without a pad is a note. Saved with the show ("rundown"). */
+SbjStatus sbj_session_set_rundown_json(const SbjSession *session, const char *json);
+/* Fire the standby step, then move standby to the next pad step.
+ * Status JSON "standby" is the step index, or null when finished. */
+SbjStatus sbj_session_rundown_go(const SbjSession *session);
+/* Put a step on standby (a note moves on to the next pad step);
+ * negative = finished. */
+SbjStatus sbj_session_set_standby(const SbjSession *session, int32_t index);
+/* Move standby to the next/previous pad step without firing. */
+SbjStatus sbj_session_step_standby(const SbjSession *session, bool forward);
+
+/* The visible bank (0-based): hotkeys and OSC pad numbers refer to it. */
+SbjStatus sbj_session_set_bank(const SbjSession *session, uint32_t bank);
+/* JSON array of outputs: [{"name", "device": {"id","name"}?, "backup": {...}?}] */
+SbjStatus sbj_session_set_outputs_json(const SbjSession *session, const char *json);
+
+/* ---- External control ------------------------------------------------ */
+
+/* Listen to every MIDI input (true; call again to rescan) or stop. */
+SbjStatus sbj_session_enable_midi(const SbjSession *session, bool enabled);
+/* Listen for OSC on a UDP port; 0 stops. See sbj-session/src/control.rs
+ * for the address space (/sbj/fire/<pad>, /sbj/stopall, ...). */
+SbjStatus sbj_session_set_osc_port(const SbjSession *session, uint16_t port);
+/* Serve the phone/tablet remote page on a TCP port (all interfaces);
+ * 0 stops it. pin: 4-12 digits, required by every /api/ request
+ * (X-SBJ-PIN header); may be NULL when port is 0. */
+SbjStatus sbj_session_set_remote(const SbjSession *session, uint16_t port, const char *pin);
+/* Assign the next MIDI message to target: "cue:<slot>", "stop_all",
+ * "next_bank", "prev_bank". NULL cancels. */
+SbjStatus sbj_session_learn_midi(const SbjSession *session, const char *target);
+SbjStatus sbj_session_clear_midi(const SbjSession *session, const char *target);
+
+/* Pre-game check: {"ready", "memory_mb", "checks": [{"level":
+ * "ok|info|warning|error", "message"}]}. Free with sbj_string_free. */
+char *sbj_session_preflight_json(const SbjSession *session);
+
+/* ---- Play log (licensing / sponsor reports) ------------------------- */
+
+/* Directory for daily log files (YYYY-MM-DD.jsonl, UTC); NULL = no files. */
+SbjStatus sbj_session_set_log_dir(const SbjSession *session, const char *dir);
+/* Game name stamped on new entries, e.g. "vs. Tigers". */
+SbjStatus sbj_session_set_game(const SbjSession *session, const char *name);
+/* {"entries": [{"started" (unix s), "seconds", "game", "show", "slot", "bank",
+ *  "pad", "title", "file", "sponsor", "source", "output", "open"}],
+ *  "songs": [{"name","plays","seconds"}], "sponsors": [...]}. Free it. */
+char *sbj_session_log_json(const SbjSession *session);
+/* Clears the in-memory log; files are kept. */
+SbjStatus sbj_session_clear_log(const SbjSession *session);
+
+/* ---- Cues ------------------------------------------------------------- */
+
+/* SLOW if new audio: adds/replaces the cue in json's "slot". */
+SbjStatus sbj_session_set_cue_json(const SbjSession *session, const char *json);
+SbjStatus sbj_session_remove_cue(const SbjSession *session, uint32_t slot);
+/* Swaps with whatever is in `to`. */
+SbjStatus sbj_session_move_cue(const SbjSession *session, uint32_t slot, uint32_t to);
+
+/* After sbj_session_load_sound: {"duration", "loudness": LUFS|null,
+ * "peak_db": dBFS|null, "lead_silence", "tail_silence" (seconds),
+ * "level_gain_db": dB|null (what level matching applies; null if off)},
+ * or "null" if the file is not loaded. NULL on error.
+ * Free with sbj_string_free. */
+char *sbj_session_sound_info_json(const SbjSession *session, const char *file);
+/* SLOW: decodes a file for display before use. duration_out may be NULL. */
+SbjStatus sbj_session_load_sound(const SbjSession *session, const char *file,
+                                 double *duration_out);
+/* Fills out[2*buckets] with (min, max) pairs for a loaded file. */
+SbjStatus sbj_session_waveform(const SbjSession *session, const char *file,
+                               uint32_t buckets, float *out);
+
+/* ---- Playback --------------------------------------------------------- */
+
+/* Fires a pad as pressing it does: starts it; if playing, releases a vamp
+ * or applies its retrigger setting. Handles exclusive groups and ducking.
+ * Empty pad: no-op. */
+SbjStatus sbj_session_fire_cue(const SbjSession *session, uint32_t slot);
+/* Preview (audition) a pad on the preview output, e.g. headphones, without
+ * affecting the main outputs. Previewing the same pad again stops it. */
+SbjStatus sbj_session_preview_cue(const SbjSession *session, uint32_t slot);
+/* Move the preview's playhead (playing it again if it had stopped). */
+SbjStatus sbj_session_seek_preview(const SbjSession *session, double seconds);
+SbjStatus sbj_session_stop_preview(const SbjSession *session);
+/* Output index used for previews; negative = preview off. */
+SbjStatus sbj_session_set_preview_output(const SbjSession *session, int32_t output);
+/* Playlist pad: crossfade to the next song (or start it). */
+SbjStatus sbj_session_skip_cue(const SbjSession *session, uint32_t slot);
+SbjStatus sbj_session_play_cue_from(const SbjSession *session, uint32_t slot, double seconds);
+SbjStatus sbj_session_stop_cue(const SbjSession *session, uint32_t slot, double fade_seconds);
+SbjStatus sbj_session_stop_all(const SbjSession *session, double fade_seconds);
+SbjStatus sbj_session_set_master_gain(const SbjSession *session, float gain);
+
+/* States of `count` pads from `first`, in one call. */
+SbjStatus sbj_session_cue_states(const SbjSession *session, uint32_t first, uint32_t count,
+                                 SbjCueState *out);
 
 #ifdef __cplusplus
 }

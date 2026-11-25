@@ -22,7 +22,7 @@ mod render;
 mod timeline;
 
 pub use buffer::{AudioBuffer, BufferError};
-pub use engine::{Controller, Engine, EngineConfig, EngineError, Event};
+pub use engine::{Controller, Engine, EngineConfig, EngineError, Event, PlayerId};
 pub use render::Renderer;
 pub use timeline::{
     Clip, Fade, FadeCurve, LoopCount, Marker, MarkerAction, MarkerId, Timeline, TimelineBuilder,

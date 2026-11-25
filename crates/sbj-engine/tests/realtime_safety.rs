@@ -12,7 +12,9 @@ use std::cell::Cell;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use common::*;
-use sbj_engine::{Clip, LoopCount, Marker, MarkerAction, Renderer, Timeline};
+use sbj_engine::{Clip, LoopCount, Marker, MarkerAction, PlayerId, Renderer, Timeline};
+
+const P: PlayerId = PlayerId(0);
 
 struct GuardedAlloc;
 
@@ -79,32 +81,140 @@ fn process_never_allocates_or_frees() {
         .build()
         .unwrap();
 
-    let (mut c, mut r) = engine(2);
-    let mut buf = vec![0.0f32; 256 * 2];
+    let mut config = sbj_engine::EngineConfig::new(RATE, 2);
+    config.declick_frames = 64; // exercise crossfades and stop fades
+    let (mut c, mut r) = sbj_engine::Engine::create(config).unwrap();
+    // Mix of device block sizes, including one larger than the engine's
+    // internal mix block so the splitting path is covered.
+    let mut buf = vec![0.0f32; 2048 * 2];
 
     // Exercise every command path, including swapping timelines while
     // playing (the old timeline must be freed on this thread, not in
     // `process`).
-    c.load_timeline(busy.clone()).unwrap();
+    c.load(P, busy.clone()).unwrap();
     c.set_master_gain(0.8).unwrap();
-    c.play().unwrap();
+    c.play(P).unwrap();
     for i in 0..200 {
         match i {
-            20 => c.seek(500).unwrap(),
-            40 => c.pause().unwrap(),
-            45 => c.play().unwrap(),
-            60 => c.load_timeline(busy.clone()).unwrap(),
-            61 => c.play().unwrap(),
-            100 => c.fade_out_and_stop(1_000).unwrap(),
-            120 => c.play().unwrap(),
-            150 => c.stop().unwrap(),
+            20 => c.seek(P, 500).unwrap(),
+            40 => c.pause(P).unwrap(),
+            45 => c.play(P).unwrap(),
+            60 => c.load(P, busy.clone()).unwrap(),
+            61 => c.play(P).unwrap(),
+            100 => c.fade_out_and_stop(P, 1_000).unwrap(),
+            120 => c.play(P).unwrap(),
+            130 => {
+                c.load(PlayerId(3), busy.clone()).unwrap();
+                c.set_player_gain(PlayerId(3), 0.5).unwrap();
+                c.restart(PlayerId(3)).unwrap();
+                c.restart(P).unwrap();
+            }
+            140 => c.stop_all(2_000).unwrap(),
+            145 => c.restart(PlayerId(3)).unwrap(),
+            150 => c.stop(P).unwrap(),
+            160 => c.unload(PlayerId(3)).unwrap(),
+            170 => {
+                c.set_route(P, 1, 1).unwrap();
+                c.restart(P).unwrap();
+                c.set_player_gain_over(P, 0.2, 5_000).unwrap();
+                c.release(P).unwrap();
+            }
             _ => {}
         }
-        guarded_process(&mut r, &mut buf);
+        let frames = [256, 2048, 1, 333][i % 4];
+        guarded_process(&mut r, &mut buf[..frames * 2]);
         while c.poll_event().is_some() {}
     }
 
     assert_eq!(VIOLATIONS.load(Ordering::SeqCst), 0);
     assert_eq!(c.leaked_garbage(), 0);
+    assert_eq!(c.dropped_events(), 0);
+}
+
+#[test]
+fn cross_player_and_level_markers_never_allocate() {
+    // Pad 0 starts pad 1 and pad 2, stops pad 1, ramps its own level and
+    // reports a Notify marker, on a loop so the paths run many times.
+    let source = Timeline::builder(RATE)
+        .clip(Clip::new(ramp_buffer(4_000)))
+        .marker(Marker::new(
+            1,
+            500,
+            MarkerAction::Start {
+                player: PlayerId(1),
+                fade_in: 100,
+            },
+        ))
+        .marker(Marker::new(
+            2,
+            500,
+            MarkerAction::Start {
+                player: PlayerId(2),
+                fade_in: 0,
+            },
+        ))
+        .marker(Marker::new(
+            3,
+            1_500,
+            MarkerAction::StopPlayer {
+                player: PlayerId(1),
+                fade: 0,
+            },
+        ))
+        .marker(Marker::new(
+            4,
+            2_000,
+            MarkerAction::StopPlayer {
+                player: PlayerId(2),
+                fade: 300,
+            },
+        ))
+        .marker(Marker::new(
+            5,
+            2_500,
+            MarkerAction::Level {
+                gain: 0.25,
+                length: 200,
+            },
+        ))
+        .marker(Marker::new(6, 3_000, MarkerAction::Notify))
+        .marker(Marker::new(
+            7,
+            3_500,
+            MarkerAction::Loop {
+                to: 0,
+                count: LoopCount::Infinite,
+            },
+        ))
+        .build()
+        .unwrap();
+    let target = Timeline::builder(RATE)
+        .clip(Clip::new(ramp_buffer(3_000)))
+        .marker(Marker::new(
+            1,
+            700,
+            MarkerAction::Start {
+                player: PlayerId(3),
+                fade_in: 0,
+            },
+        ))
+        .build()
+        .unwrap();
+
+    let mut config = sbj_engine::EngineConfig::new(RATE, 2);
+    config.declick_frames = 64;
+    let (mut c, mut r) = sbj_engine::Engine::create(config).unwrap();
+    c.load(P, source).unwrap();
+    c.load(PlayerId(1), target.clone()).unwrap();
+    c.load(PlayerId(2), target.clone()).unwrap();
+    c.load(PlayerId(3), target).unwrap();
+    c.play(P).unwrap();
+    let mut buf = vec![0.0f32; 2048 * 2];
+    for i in 0..300 {
+        let frames = [256, 2048, 1, 333, 64][i % 5];
+        guarded_process(&mut r, &mut buf[..frames * 2]);
+        while c.poll_event().is_some() {}
+    }
+    assert_eq!(VIOLATIONS.load(Ordering::SeqCst), 0);
     assert_eq!(c.dropped_events(), 0);
 }

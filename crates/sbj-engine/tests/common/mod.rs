@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use sbj_engine::{AudioBuffer, Controller, Engine, EngineConfig, Event, Renderer};
+use sbj_engine::{AudioBuffer, Controller, Engine, EngineConfig, Event, PlayerId, Renderer};
 
 pub const RATE: u32 = 48_000;
 
@@ -25,6 +25,7 @@ pub fn ramp(range: std::ops::Range<usize>) -> Vec<f32> {
 pub fn engine(channels: u16) -> (Controller, Renderer) {
     let mut config = EngineConfig::new(RATE, channels);
     config.gain_ramp_frames = 0;
+    config.declick_frames = 0;
     Engine::create(config).unwrap()
 }
 
@@ -42,7 +43,7 @@ pub fn render_until_stopped(
     while out.len() < max_frames {
         renderer.process(&mut buf);
         out.extend_from_slice(&buf);
-        if !controller.is_playing() {
+        if !controller.is_playing(PlayerId(0)) {
             break;
         }
     }
