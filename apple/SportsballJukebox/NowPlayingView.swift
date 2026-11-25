@@ -118,11 +118,18 @@ private struct PreviewRow: View {
     @EnvironmentObject private var model: AppModel
     let preview: PreviewInfo
 
+    private var title: String {
+        if let file = preview.file {
+            return URL(fileURLWithPath: file).deletingPathExtension().lastPathComponent
+        }
+        return model.show.cue(at: preview.slot)?.title ?? "pad"
+    }
+
     var body: some View {
         HStack {
             Image(systemName: "headphones")
             VStack(alignment: .leading) {
-                Text("Preview: \(model.show.cue(at: preview.slot)?.title ?? "pad")")
+                Text("Preview: \(title)")
                     .lineLimit(1)
                 Text(formatTime(preview.position))
                     .font(.caption.monospacedDigit())

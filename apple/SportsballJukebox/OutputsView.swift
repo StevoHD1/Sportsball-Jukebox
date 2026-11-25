@@ -211,6 +211,7 @@ struct ShowSettingsView: View {
     @State private var stopAllFade = 0.5
     @State private var levelMatchOn = false
     @State private var levelTarget = -16.0
+    @State private var padDefaults = PadDefaults()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -245,6 +246,10 @@ struct ShowSettingsView: View {
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+            }
+            DisclosureGroup("New pads") {
+                PadDefaultsEditor(defaults: $padDefaults, outputs: model.show.outputs)
+                    .padding(.top, 6)
             }
             Text("Banks").font(.headline)
             Text("Each bank is a page of pads. Switch with ⌘1–⌘9, the bank tabs, MIDI or OSC.")
@@ -284,6 +289,9 @@ struct ShowSettingsView: View {
                         stopAllFade: stopAllFade,
                         levelMatch: levelMatchOn ? levelTarget : nil
                     )
+                    if padDefaults != (model.show.padDefaults ?? PadDefaults()) {
+                        model.setPadDefaults(padDefaults == PadDefaults() ? nil : padDefaults)
+                    }
                     dismiss()
                 }
                 .keyboardShortcut(.defaultAction)
@@ -291,7 +299,7 @@ struct ShowSettingsView: View {
             }
         }
         .padding(20)
-        .frame(width: 420)
+        .frame(width: 540)
         .onAppear {
             name = model.show.name
             slots = model.show.slots
@@ -302,6 +310,122 @@ struct ShowSettingsView: View {
             if let target = model.show.levelMatch {
                 levelTarget = target
             }
+            padDefaults = model.show.padDefaults ?? PadDefaults()
         }
+    }
+}
+
+/// What a new pad starts with when audio is dropped on an empty pad.
+private struct PadDefaultsEditor: View {
+    @Binding var defaults: PadDefaults
+    let outputs: [OutputDoc]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Colour")
+                Picker("Colour", selection: color) {
+                    Text("Default").tag("")
+                    ForEach(PadColor.allCases, id: \.self) { c in
+                        Text(c.rawValue.capitalized).tag(c.rawValue)
+                    }
+                    if let custom = defaults.color, PadColor(rawValue: custom) == nil {
+                        Text("Custom").tag(custom)
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 120)
+                ColorPicker("Custom colour", selection: customColor, supportsOpacity: false)
+                    .labelsHidden()
+                Spacer()
+                Picker("Output", selection: $defaults.output) {
+                    ForEach(Array(outputs.enumerated()), id: \.offset) { index, output in
+                        Text(output.name).tag(index)
+                    }
+                }
+                .frame(width: 170)
+            }
+            HStack {
+                Text("Fade in").fixedSize()
+                TextField("", value: $defaults.fadeIn, format: .number.precision(.fractionLength(0...2)))
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 50)
+                Text("out").fixedSize()
+                TextField("", value: fadeOut, format: .number.precision(.fractionLength(0...2)))
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 50)
+                Text("s").foregroundStyle(.secondary)
+                Spacer()
+                Text("Group").fixedSize()
+                TextField("none", text: group)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 110)
+            }
+            HStack {
+                Toggle("Loop", isOn: $defaults.loop)
+                Toggle("Duck others", isOn: ducking)
+                if ducking.wrappedValue {
+                    Slider(value: duckDB, in: -40 ... -3).frame(width: 80)
+                    Text(String(format: "%.0f dB", duckDB.wrappedValue))
+                        .font(.caption.monospacedDigit())
+                }
+            }
+            HStack {
+                Toggle("Skip silence at the start", isOn: $defaults.trimSilence)
+                Toggle("Level-match", isOn: $defaults.levelMatch)
+                Spacer()
+                Button("Reset") { defaults = PadDefaults() }
+                    .disabled(defaults == PadDefaults())
+            }
+            Text("Applied when audio is dropped on an empty pad. Right-click a pad → Use Style for New Pads to copy its settings here.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var color: Binding<String> {
+        Binding(
+            get: { defaults.color ?? "" },
+            set: { defaults.color = $0.isEmpty ? nil : $0 }
+        )
+    }
+
+    private var customColor: Binding<Color> {
+        Binding(
+            get: { PadColor.color(named: defaults.color ?? PadColor.blue.rawValue) },
+            set: { if let hex = PadColor.hex($0) { defaults.color = hex } }
+        )
+    }
+
+    private var fadeOut: Binding<Double> {
+        Binding(
+            get: { defaults.fadeOut ?? 0.5 },
+            set: { defaults.fadeOut = $0 == 0.5 ? nil : max($0, 0) }
+        )
+    }
+
+    private var group: Binding<String> {
+        Binding(
+            get: { defaults.group ?? "" },
+            set: {
+                let trimmed = $0.trimmingCharacters(in: .whitespaces)
+                defaults.group = trimmed.isEmpty ? nil : trimmed
+            }
+        )
+    }
+
+    private var ducking: Binding<Bool> {
+        Binding(
+            get: { defaults.duck != nil },
+            set: { defaults.duck = $0 ? (defaults.duck ?? -12) : nil }
+        )
+    }
+
+    private var duckDB: Binding<Double> {
+        Binding(
+            get: { Double(defaults.duck ?? -12) },
+            set: { defaults.duck = Float($0.rounded()) }
+        )
     }
 }

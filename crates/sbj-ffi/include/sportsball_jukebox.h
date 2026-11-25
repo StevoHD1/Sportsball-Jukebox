@@ -103,7 +103,9 @@ SbjStatus sbj_session_device_info(const SbjSession *session, uint32_t index,
 /* The show document as JSON. Free with sbj_string_free. */
 char *sbj_session_show_json(const SbjSession *session);
 
-/* {"game", "preview_output": number|null, "preview": {"slot","playing","position"}|null,
+/* {"game", "preview_output": number|null,
+ *  "preview": {"slot" (4294967295 for a library file), "file": string|null,
+ *  "playing","position"}|null,
  *  "bank", "standby": index|null,
  *  "learning": "cue:N|stop_all|next_bank|prev_bank|rundown_go"|null,
  *  "last_control": string|null, "midi_inputs": [string]|null (null = MIDI off),
@@ -124,6 +126,30 @@ SbjStatus sbj_session_save_show(const SbjSession *session, const char *path);
  *  absent = unchanged; changing it reloads, and so stops, every pad)}.
  * Cue slots are bank * slots + pad; resizing keeps each cue's bank/pad. */
 SbjStatus sbj_session_set_show_settings_json(const SbjSession *session, const char *json);
+/* ---- Library ------------------------------------------------------------ */
+
+/* Settings for new pads: {"color"?, "fade_in"?, "fade_out"?, "loop"?,
+ * "group"?, "output"?, "duck"?, "trim_silence"?, "level_match"?}
+ * (the show file's "pad_defaults"); NULL or "null" = built-in. The app
+ * applies them when it creates a pad. */
+SbjStatus sbj_session_set_pad_defaults_json(const SbjSession *session, const char *json);
+
+/* [{"file", "used_by": [slot], "loaded", "duration": s|null,
+ *   "loudness": LUFS|null, "error": string|null}]. Library = files kept
+ * with the show ("library") plus every file a pad uses. Free with
+ * sbj_string_free. */
+char *sbj_session_library_json(const SbjSession *session);
+/* JSON array of file paths; not decoded until used or previewed. */
+SbjStatus sbj_session_add_to_library_json(const SbjSession *session, const char *json);
+/* Refused (SHOW_ERROR) while a pad uses the file. */
+SbjStatus sbj_session_remove_from_library(const SbjSession *session, const char *file);
+/* SLOW the first time (decodes): play a file on the preview output;
+ * again stops it. */
+SbjStatus sbj_session_preview_file(const SbjSession *session, const char *file);
+/* Where a file the show refers to is (also looks in the show's Audio and
+ * Images folders); NULL if not found. Free with sbj_string_free. */
+char *sbj_session_resolve_file(const SbjSession *session, const char *file);
+
 /* ---- Rundown ------------------------------------------------------------ */
 
 /* JSON array of steps [{"id", "pad"?: slot, "text"?: string}]; a step

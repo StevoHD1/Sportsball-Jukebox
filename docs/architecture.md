@@ -1,6 +1,6 @@
 # Sportsball Jukebox: Architecture
 
-Status: Phase 11 (game rundown). Last updated 2026-11-24.
+Status: Phase 12 (show building: library, pad looks, styles, defaults). Last updated 2026-11-24.
 
 ## Goals, in priority order
 
@@ -435,6 +435,30 @@ state). Plays are logged with the source `rundown` (or the control
 surface's own source). Steps follow pads that move or are renumbered;
 the pre-game check warns about steps on empty pads.
 
+## Show building (Phase 12)
+
+- **Library** (`sbj-session/src/library.rs`): the show's `library` lists
+  audio files kept for building pads; the library shown is those plus
+  every file a pad uses, with which pads use each. Library-only files are
+  **not decoded** when the show opens, so a large library costs no
+  memory; they are decoded when previewed (`preview_file`, on the preview
+  output, level-matched like a new pad) or put on a pad. Files a pad uses
+  can't be removed from it. The app adds files or whole folders, searches,
+  and drags files onto pads or into a pad's timeline (the pad editor has
+  its own copy of the library, as the main window can't be reached while
+  the editor sheet is open).
+- **Pad looks:** `color` is a preset name or `#RRGGBB` (the remote page
+  understands both); `image` is a picture shown on the pad, copied into
+  an `Images` folder beside a saved show and found there if the show
+  moves (`show::resolve_file` looks in `Audio` and `Images`).
+- **Copy / Paste Style** (app only): colour, picture, fades, loop,
+  group, output, ducking, retrigger and level matching; not the sound,
+  title or key.
+- **New-pad defaults:** the show's `pad_defaults` (colour, fades, loop,
+  group, output, ducking, skip leading silence, level matching), applied
+  by the app when audio is dropped on an empty pad. Settable in Show
+  Settings or from a pad (Use Style for New Pads).
+
 ## Play log (Phase 7)
 
 `sbj-session/src/log.rs` records each time a pad or playlist song starts:
@@ -591,6 +615,12 @@ CI.
 **Phase 11: Game rundown (built; awaiting Mac testing)**
 - Ordered list of pad steps and notes; standby, GO (Space), back/next.
 - GO from MIDI, OSC and the phone remote; steps follow moved pads.
+
+**Phase 12: Show building (built; awaiting Mac testing)**
+- Audio library sidebar (import files/folders, search, preview, drag
+  onto pads or into a pad's timeline).
+- Custom pad colours and pictures; Copy/Paste Style; defaults for new
+  pads.
 
 **Next candidates**
 - Signed releases once there is a Developer account.

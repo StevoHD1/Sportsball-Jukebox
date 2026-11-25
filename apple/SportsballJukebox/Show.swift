@@ -32,6 +32,10 @@ struct ShowDoc: Codable, Equatable {
     var levelMatch: Double?
     /// The game's running order, fired step by step with GO.
     var rundown: [RundownItem] = []
+    /// Audio files kept with the show (besides those pads use).
+    var library: [String] = []
+    /// Settings for new pads; nil = built-in.
+    var padDefaults: PadDefaults?
 
     enum CodingKeys: String, CodingKey {
         case format, version, name, slots, columns, banks, outputs, cues, controls
@@ -39,7 +43,8 @@ struct ShowDoc: Codable, Equatable {
         case stopAllFade = "stop_all_fade"
         case previewOutput = "preview_output"
         case levelMatch = "level_match"
-        case rundown
+        case rundown, library
+        case padDefaults = "pad_defaults"
     }
 
     /// Global slot numbers of a bank's pads.
@@ -64,6 +69,8 @@ struct ShowDoc: Codable, Equatable {
         previewOutput = try c.decodeIfPresent(Int.self, forKey: .previewOutput)
         levelMatch = try c.decodeIfPresent(Double.self, forKey: .levelMatch)
         rundown = try c.value(.rundown, or: [])
+        library = try c.value(.library, or: [])
+        padDefaults = try c.decodeIfPresent(PadDefaults.self, forKey: .padDefaults)
         outputs = try c.value(.outputs, or: outputs)
         cues = try c.value(.cues, or: cues)
     }
@@ -112,6 +119,76 @@ struct ControlsDoc: Codable, Equatable {
         case nextBank = "next_bank"
         case prevBank = "prev_bank"
         case rundownGo = "rundown_go"
+    }
+}
+
+/// Settings given to new pads when audio is dropped on an empty pad.
+struct PadDefaults: Codable, Equatable {
+    var color: String?
+    var fadeIn: Double = 0
+    var fadeOut: Double?
+    var loop = false
+    var group: String?
+    var output = 0
+    var duck: Float?
+    /// Start new pads where the sound starts.
+    var trimSilence = true
+    var levelMatch = true
+
+    enum CodingKeys: String, CodingKey {
+        case color, loop, group, output, duck
+        case fadeIn = "fade_in"
+        case fadeOut = "fade_out"
+        case trimSilence = "trim_silence"
+        case levelMatch = "level_match"
+    }
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        color = try c.decodeIfPresent(String.self, forKey: .color)
+        fadeIn = try c.value(.fadeIn, or: 0)
+        fadeOut = try c.decodeIfPresent(Double.self, forKey: .fadeOut)
+        loop = try c.value(.loop, or: false)
+        group = try c.decodeIfPresent(String.self, forKey: .group)
+        output = try c.value(.output, or: 0)
+        duck = try c.decodeIfPresent(Float.self, forKey: .duck)
+        trimSilence = try c.value(.trimSilence, or: true)
+        levelMatch = try c.value(.levelMatch, or: true)
+    }
+
+    /// Applies these settings to a new pad.
+    func apply(to cue: inout CueDoc, outputs: Int) {
+        cue.color = color
+        cue.fadeIn = fadeIn
+        cue.fadeOut = fadeOut
+        cue.loop = loop
+        cue.group = group
+        cue.output = output < outputs ? output : 0
+        cue.duck = duck
+        cue.levelMatch = levelMatch
+    }
+}
+
+/// One file in the show's audio library (from sbj_session_library_json).
+struct LibraryEntry: Decodable, Equatable, Identifiable {
+    var file: String
+    /// Slots of the pads that use it.
+    var usedBy: [Int]
+    /// Decoded, so duration and loudness are known.
+    var loaded: Bool
+    var duration: Double?
+    var loudness: Double?
+    var error: String?
+
+    var id: String { file }
+    var name: String { URL(fileURLWithPath: file).deletingPathExtension().lastPathComponent }
+
+    static func decodeList(_ json: String) -> [LibraryEntry] {
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        return (try? decoder.decode([LibraryEntry].self, from: Data(json.utf8))) ?? []
     }
 }
 
@@ -178,6 +255,9 @@ struct CueDoc: Codable, Equatable {
     var gain: Float = 1
     var loop = false
     var color: String?
+    /// Picture shown on the pad (a path; found next to the show or in its
+    /// Images folder if moved).
+    var image: String?
     var clips: [ClipDoc] = []
     var markers: [MarkerDoc] = []
     var midi: MidiTrigger?
@@ -199,7 +279,7 @@ struct CueDoc: Codable, Equatable {
     var levelMatch = true
 
     enum CodingKeys: String, CodingKey {
-        case slot, title, hotkey, output, gain, loop, color, clips, markers, midi
+        case slot, title, hotkey, output, gain, loop, color, image, clips, markers, midi
         case group, duck, retrigger, route, playlist, sponsor
         case fadeIn = "fade_in"
         case fadeOut = "fade_out"
@@ -227,6 +307,7 @@ struct CueDoc: Codable, Equatable {
         gain = try c.value(.gain, or: 1)
         loop = try c.value(.loop, or: false)
         color = try c.decodeIfPresent(String.self, forKey: .color)
+        image = try c.decodeIfPresent(String.self, forKey: .image)
         clips = try c.value(.clips, or: [])
         markers = try c.value(.markers, or: [])
         midi = try c.decodeIfPresent(MidiTrigger.self, forKey: .midi)
@@ -452,7 +533,10 @@ struct CueProblem: Decodable, Equatable {
 }
 
 struct PreviewInfo: Decodable, Equatable {
+    /// The pad, or 4294967295 when a library file is previewed.
     var slot: Int
+    /// The library file being previewed, if any.
+    var file: String?
     var playing: Bool
     var position: Double
 }

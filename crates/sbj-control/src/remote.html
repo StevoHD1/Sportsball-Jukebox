@@ -118,6 +118,11 @@ const COLORS = {
 function load() { try { return localStorage.getItem("sbj-pin") || ""; } catch (e) { return ""; } }
 function save(value) { try { localStorage.setItem("sbj-pin", value); } catch (e) { /* ignore */ } }
 let pin = load();
+
+/// A colour name from the app, or a custom "#RRGGBB".
+function padColor(c) {
+  return /^#[0-9a-f]{6}$/i.test(c || "") ? c : (COLORS[c] || COLORS.blue);
+}
 let state = null;
 let failures = 0;
 
@@ -266,7 +271,7 @@ function renderGrid() {
   state.pads.forEach((p, i) => {
     if (!p.assigned) return;
     const b = grid.children[i];
-    b.style.background = p.playing ? "#2f9e4c" : (COLORS[p.color] || COLORS.blue);
+    b.style.background = p.playing ? "#2f9e4c" : padColor(p.color);
     b.classList.toggle("notready", !p.ready);
     b.classList.toggle("playing", p.playing);
     b.querySelector(".title").textContent = p.title;

@@ -29,6 +29,11 @@ struct SportsballJukeboxApp: App {
                 Button("Control (MIDI, OSC, Remote)…") { model.showingControls = true }
                     .keyboardShortcut("m", modifiers: [.command, .shift])
                 Button("Show Settings…") { model.showingSettings = true }
+                Button(model.showingLibrary ? "Hide Library" : "Show Library") {
+                    model.showingLibrary.toggle()
+                }
+                .keyboardShortcut("l", modifiers: [.command, .option])
+                Button("Add to Library…") { model.importToLibrary() }
                 Button(model.showingRundown ? "Hide Rundown" : "Show Rundown") {
                     model.showingRundown.toggle()
                 }

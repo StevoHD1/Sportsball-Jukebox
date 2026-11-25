@@ -192,6 +192,41 @@ final class EngineSession: @unchecked Sendable {
         try Engine.check(sbj_session_set_show_settings_json(handle, json))
     }
 
+    // MARK: Library
+
+    func library() -> [LibraryEntry] {
+        guard let json = Engine.take(sbj_session_library_json(handle)) else { return [] }
+        return LibraryEntry.decodeList(json)
+    }
+
+    func addToLibrary(_ files: [String]) throws {
+        try Engine.check(sbj_session_add_to_library_json(handle, try ShowDoc.encode(files)))
+    }
+
+    func removeFromLibrary(_ file: String) throws {
+        try Engine.check(sbj_session_remove_from_library(handle, file))
+    }
+
+    /// Slow the first time (decodes). Previewing the same file again stops it.
+    func previewFile(_ file: String) throws {
+        try Engine.check(sbj_session_preview_file(handle, file))
+    }
+
+    /// Where a file the show refers to is on disk (also looks in the
+    /// show's Audio and Images folders), or nil.
+    func resolveFile(_ file: String) -> String? {
+        Engine.take(sbj_session_resolve_file(handle, file))
+    }
+
+    /// nil restores the built-in defaults.
+    func setPadDefaults(_ defaults: PadDefaults?) throws {
+        if let defaults {
+            try Engine.check(sbj_session_set_pad_defaults_json(handle, try ShowDoc.encode(defaults)))
+        } else {
+            try Engine.check(sbj_session_set_pad_defaults_json(handle, nil))
+        }
+    }
+
     // MARK: Rundown
 
     func setRundown(_ items: [RundownItem]) throws {

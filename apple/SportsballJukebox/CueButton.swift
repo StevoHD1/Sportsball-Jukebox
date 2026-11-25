@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Pad colours, by the names stored in the show file.
 enum PadColor: String, CaseIterable {
@@ -18,8 +19,34 @@ enum PadColor: String, CaseIterable {
         }
     }
 
+    /// A preset name, or a custom "#RRGGBB".
     static func color(named name: String?) -> Color {
-        name.flatMap(PadColor.init(rawValue:))?.color ?? .accentColor
+        guard let name else { return .accentColor }
+        if let preset = PadColor(rawValue: name) { return preset.color }
+        if let rgb = rgb(hex: name) {
+            return Color(.sRGB, red: rgb.0, green: rgb.1, blue: rgb.2, opacity: 1)
+        }
+        return .accentColor
+    }
+
+    static func rgb(hex: String) -> (Double, Double, Double)? {
+        guard hex.count == 7, hex.hasPrefix("#"), let value = UInt32(hex.dropFirst(), radix: 16) else {
+            return nil
+        }
+        return (
+            Double((value >> 16) & 0xFF) / 255,
+            Double((value >> 8) & 0xFF) / 255,
+            Double(value & 0xFF) / 255
+        )
+    }
+
+    /// "#RRGGBB" for a colour from the colour picker.
+    static func hex(_ color: Color) -> String? {
+        guard let rgb = NSColor(color).usingColorSpace(.sRGB) else { return nil }
+        let r = Int((rgb.redComponent * 255).rounded())
+        let g = Int((rgb.greenComponent * 255).rounded())
+        let b = Int((rgb.blueComponent * 255).rounded())
+        return String(format: "#%02X%02X%02X", min(max(r, 0), 255), min(max(g, 0), 255), min(max(b, 0), 255))
     }
 }
 
@@ -54,6 +81,7 @@ struct CueButton: View {
         } label: {
             PadFace(
                 cue: cue,
+                image: cue.flatMap { model.padImage(for: $0) },
                 state: state,
                 hasProblems: !problems.isEmpty,
                 isBusy: isBusy
@@ -62,7 +90,7 @@ struct CueButton: View {
             .contentShape(shape)
         }
         .buttonStyle(.plain)
-        .modifier(Hotkey(key: cue?.hotkey))
+        .modifier(Hotkey(key: model.suspendHotkeys ? nil : cue?.hotkey))
         .contextMenu { menu }
         .draggable(URL(string: "\(padScheme)://\(slot)")!) {
             Text(cue?.title ?? "Pad \(slot + 1)")
@@ -73,6 +101,9 @@ struct CueButton: View {
             guard let url = urls.first else { return false }
             if url.scheme == padScheme, let from = Int(url.host ?? "") {
                 model.move(from: from, to: slot)
+            } else if url.isFileURL, cue != nil, Self.isImage(url) {
+                // A picture dropped on a pad becomes its picture.
+                model.setImage(url, for: slot)
             } else if url.isFileURL {
                 // Several files make a playlist pad.
                 model.assignSounds(urls: urls.filter(\.isFileURL), to: slot)
@@ -87,6 +118,10 @@ struct CueButton: View {
         .accessibilityValue(accessibilityValue)
         .accessibilityHint(cue == nil ? "Choose a sound" : "Plays the sound from the start")
         .accessibilityAddTraits(.isButton)
+    }
+
+    static func isImage(_ url: URL) -> Bool {
+        UTType(filenameExtension: url.pathExtension)?.conforms(to: .image) ?? false
     }
 
     private var accessibilityValue: String {
@@ -132,6 +167,15 @@ struct CueButton: View {
                 set: { model.setLoop(slot, $0) }
             ))
             Divider()
+            Button("Copy Style") { model.copyStyle(from: slot) }
+            Button("Paste Style") { model.pasteStyle(to: slot) }
+                .disabled(model.copiedStyle == nil)
+            Button("Use Style for New Pads") { model.useStyleAsDefault(from: slot) }
+            Button("Choose Picture…") { model.choosePicture(for: slot) }
+            if cue.image != nil {
+                Button("Remove Picture") { model.setImage(nil, for: slot) }
+            }
+            Divider()
             Button(cue.midi == nil ? "Learn MIDI Trigger" : "Re-learn MIDI Trigger") {
                 model.learnMIDI("cue:\(slot)")
             }
@@ -151,6 +195,7 @@ struct CueButton: View {
 
 private struct PadFace: View {
     let cue: CueDoc?
+    let image: NSImage?
     let state: CueStatus
     let hasProblems: Bool
     let isBusy: Bool
@@ -160,6 +205,28 @@ private struct PadFace: View {
     var body: some View {
         ZStack(alignment: .leading) {
             shape.fill(background)
+
+            if let image {
+                // The picture fills the pad; a dark fade at the bottom keeps
+                // the title readable, and a green wash shows it playing.
+                Color.clear
+                    .overlay(
+                        Image(nsImage: image)
+                            .resizable()
+                            .scaledToFill()
+                    )
+                    .clipShape(shape)
+                    .opacity(state.ready || state.playing ? 1 : 0.45)
+                LinearGradient(
+                    colors: [Color.black.opacity(0.05), Color.black.opacity(0.7)],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .clipShape(shape)
+                if state.playing {
+                    shape.fill(Color.green.opacity(0.35))
+                }
+            }
 
             GeometryReader { geometry in
                 Rectangle()

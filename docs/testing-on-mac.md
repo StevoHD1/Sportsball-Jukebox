@@ -240,6 +240,24 @@ built-in speakers or headphones)
 - [ ] Unplug the interface and press GO: an error appears and standby
       stays on the same step.
 
+**Phase 12: show building**
+- [ ] Show → Show Library (⌥⌘L): add a folder of audio with +. Search
+      for a file; click the headphones to preview it (needs a preview
+      output); drag it onto an empty pad.
+- [ ] Open a pad's editor, click Library in its toolbar, and drag two
+      files onto the timeline: they become clips where you dropped them.
+- [ ] In a pad's editor, pick a custom colour with the colour well, and
+      choose a picture (or drop an image file on a pad). The title stays
+      readable; the pad still turns green while playing.
+- [ ] Save the show, copy its folder (with Audio and Images) elsewhere,
+      open it there: pictures still show.
+- [ ] Right-click a pad → Copy Style, then another → Paste Style: it
+      takes the colour, picture, fades, group and so on, but keeps its own
+      sound, title and key.
+- [ ] Show Settings → New pads: set a colour and fade-out; drop a sound
+      on an empty pad: it gets them. Right-click a pad → Use Style for New
+      Pads does the same from a pad.
+
 **Stress**
 - [ ] Leave a looping cue running for 10+ minutes. The status line should
       not start showing "glitches".

@@ -30,17 +30,19 @@ use sbj_engine::{
 use sbj_media::MediaError;
 
 pub mod control;
+mod library;
 pub mod log;
 mod playback;
 mod playlist;
 mod preview;
 mod remote;
 mod rundown;
+pub use library::LibraryEntry;
 pub use remote::RemoteError;
 
 pub use log::{LogEntry, LogTotal};
 
-pub use preview::PreviewState;
+pub use preview::{FILE_PREVIEW, PreviewState};
 mod preflight;
 
 pub use control::{ControlMessage, LearnTarget, MidiMessage};
@@ -48,7 +50,8 @@ pub use preflight::{Check, CheckLevel, Preflight};
 pub use show::{
     ActionDoc, ActionKind, ClipDoc, ControlsDoc, CueDoc, CueProblem, CurveDoc, DEFAULT_FADE_OUT,
     DeviceRef, MAX_PADS_PER_BANK, MAX_SLOTS, MarkerDoc, MidiKind, MidiTrigger, OutputDoc,
-    PadTarget, PlaylistDoc, Retrigger, RouteDoc, RundownItem, Show, ShowError, TargetDoc,
+    PadDefaults, PadTarget, PlaylistDoc, Retrigger, RouteDoc, RundownItem, Show, ShowError,
+    TargetDoc,
 };
 
 /// How often to retry an output whose devices are all unavailable.
@@ -351,6 +354,9 @@ pub struct Session<B: AudioBackend> {
     playlists: HashMap<u32, playlist::PlaylistState>,
     /// The pad being previewed, and on which output.
     previewing: Option<(u32, usize)>,
+    /// The library file being previewed (with `previewing` slot
+    /// `preview::FILE_PREVIEW`).
+    previewing_file: Option<String>,
     log: log::PlayLog,
 }
 
@@ -380,6 +386,7 @@ impl<B: AudioBackend> Session<B> {
             recent_fires: HashMap::new(),
             playlists: HashMap::new(),
             previewing: None,
+            previewing_file: None,
             log: log::PlayLog::new(),
         }
     }

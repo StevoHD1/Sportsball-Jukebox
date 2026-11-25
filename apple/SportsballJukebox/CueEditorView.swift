@@ -21,6 +21,7 @@ struct CueEditorView: View {
     @State private var selection: EditorSelection?
     @State private var cursor: Double = 0
     @State private var pointsPerSecond: Double = 60
+    @State private var showLibrary = false
     @State private var loaded = false
 
     init(slot: Int) {
@@ -53,36 +54,50 @@ struct CueEditorView: View {
                 )
                 .frame(minHeight: 390)
             } else {
-                EditorToolbar(
-                    cursor: cursor,
-                    pointsPerSecond: $pointsPerSecond,
-                    isPlaying: state.playing,
-                    onAddClip: addClip,
-                    onAddMarker: addMarker,
-                    onPlayFromCursor: { play(from: cursor) },
-                    onPlayFromStart: { play(from: 0) },
-                    onStop: { model.stop(slot, fade: false) }
-                )
-                .padding(.horizontal, 16)
-                .padding(.vertical, 8)
-                CueTimeline(
-                    draft: $draft,
-                    selection: $selection,
-                    cursor: $cursor,
-                    pointsPerSecond: pointsPerSecond,
-                    playhead: state.playing ? state.position : nil
-                )
-                .frame(minHeight: 220)
-                Divider()
-                InspectorView(draft: $draft, selection: $selection)
-                    .frame(height: 170)
-                    .padding(.horizontal, 16)
+                HStack(spacing: 0) {
+                    VStack(spacing: 0) {
+                        EditorToolbar(
+                            cursor: cursor,
+                            pointsPerSecond: $pointsPerSecond,
+                            showLibrary: $showLibrary,
+                            isPlaying: state.playing,
+                            onAddClip: addClip,
+                            onAddMarker: addMarker,
+                            onPlayFromCursor: { play(from: cursor) },
+                            onPlayFromStart: { play(from: 0) },
+                            onStop: { model.stop(slot, fade: false) }
+                        )
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
+                        CueTimeline(
+                            draft: $draft,
+                            selection: $selection,
+                            cursor: $cursor,
+                            pointsPerSecond: pointsPerSecond,
+                            playhead: state.playing ? state.position : nil,
+                            onDropFiles: addClips
+                        )
+                        .frame(minHeight: 220)
+                        Divider()
+                        InspectorView(draft: $draft, selection: $selection)
+                            .frame(height: 170)
+                            .padding(.horizontal, 16)
+                    }
+                    if showLibrary {
+                        Divider()
+                        // Drag files from here onto the timeline (the main
+                        // window's library can't be reached while this sheet is
+                        // open).
+                        LibraryView()
+                            .frame(maxHeight: .infinity)
+                    }
+                }
             }
             Divider()
             footer
                 .padding(16)
         }
-        .frame(minWidth: 980, minHeight: 680)
+        .frame(minWidth: showLibrary ? 1270 : 980, minHeight: 680)
         .onAppear(perform: load)
         .onChange(of: draft.clips.map(\.file)) { _, files in
             files.forEach(model.loadAudioInfo(for:))
@@ -176,6 +191,22 @@ struct CueEditorView: View {
         model.loadAudioInfo(for: url.path)
     }
 
+    /// Files dropped on the timeline (from the library or Finder) become
+    /// clips starting where they were dropped, one after another.
+    private func addClips(_ urls: [URL], at seconds: Double) {
+        var start = TimelineMath.snap(seconds)
+        for url in urls where AppModel.audioExtensions.contains(url.pathExtension.lowercased()) {
+            var clip = ClipDoc(file: url.path)
+            clip.start = start
+            draft.clips.append(clip)
+            model.loadAudioInfo(for: url.path)
+            start += model.durations[url.path] ?? 0
+        }
+        if !draft.clips.isEmpty {
+            selection = .clip(draft.clips.count - 1)
+        }
+    }
+
     private func addMarker() {
         let marker = MarkerDoc(
             id: draft.nextMarkerID,
@@ -222,8 +253,15 @@ private struct EditorHeader: View {
                     ForEach(PadColor.allCases, id: \.self) { c in
                         Text(c.rawValue.capitalized).tag(c.rawValue)
                     }
+                    if PadColor(rawValue: color.wrappedValue) == nil {
+                        Text("Custom").tag(color.wrappedValue)
+                    }
                 }
                 .frame(width: 150)
+                ColorPicker("Custom colour", selection: customColor, supportsOpacity: false)
+                    .labelsHidden()
+                    .help("Any colour")
+                PictureButton(draft: $draft)
             }
 
             HStack(spacing: 20) {
@@ -298,6 +336,13 @@ private struct EditorHeader: View {
             set: { draft.color = $0 }
         )
     }
+
+    private var customColor: Binding<Color> {
+        Binding(
+            get: { PadColor.color(named: draft.color ?? PadColor.blue.rawValue) },
+            set: { if let hex = PadColor.hex($0) { draft.color = hex } }
+        )
+    }
 }
 
 // MARK: - Toolbar
@@ -305,6 +350,7 @@ private struct EditorHeader: View {
 private struct EditorToolbar: View {
     let cursor: Double
     @Binding var pointsPerSecond: Double
+    @Binding var showLibrary: Bool
     let isPlaying: Bool
     let onAddClip: () -> Void
     let onAddMarker: () -> Void
@@ -315,6 +361,9 @@ private struct EditorToolbar: View {
     var body: some View {
         HStack(spacing: 12) {
             Button(action: onAddClip) { Label("Add Clip…", systemImage: "waveform.badge.plus") }
+            Toggle(isOn: $showLibrary) { Label("Library", systemImage: "music.note.list") }
+                .toggleStyle(.button)
+                .help("Show the library; drag files onto the timeline")
             Button(action: onAddMarker) { Label("Add Marker", systemImage: "flag") }
                 .help("Adds a marker at the cursor")
             Divider().frame(height: 20)
@@ -373,6 +422,8 @@ private struct CueTimeline: View {
     @Binding var cursor: Double
     let pointsPerSecond: Double
     let playhead: Double?
+    let onDropFiles: ([URL], Double) -> Void
+    @State private var isDropTarget = false
 
     private var width: CGFloat {
         let end = TimelineMath.contentEnd(of: draft, durations: model.durations)
@@ -410,9 +461,20 @@ private struct CueTimeline: View {
                     )
                 }
                 if draft.clips.isEmpty {
-                    Text("No clips. Use Add Clip… to place audio on the timeline.")
+                    Text("No clips. Drag audio here from the library or Finder, or use Add Clip….")
                         .foregroundStyle(.secondary)
                         .padding(20)
+                }
+            }
+            .dropDestination(for: URL.self) { urls, location in
+                let files = urls.filter(\.isFileURL)
+                guard !files.isEmpty else { return false }
+                onDropFiles(files, max(Double(location.x) / pointsPerSecond, 0))
+                return true
+            } isTargeted: { isDropTarget = $0 }
+            .overlay {
+                if isDropTarget {
+                    Rectangle().strokeBorder(Color.accentColor, lineWidth: 2)
                 }
             }
             .overlay(alignment: .topLeading) {
@@ -1408,5 +1470,42 @@ private struct PlaylistEditor: View {
 
     private func move(from source: IndexSet, to destination: Int) {
         draft.playlist?.items.move(fromOffsets: source, toOffset: destination)
+    }
+}
+
+/// The pad's picture: a thumbnail, with Choose / Remove.
+private struct PictureButton: View {
+    @EnvironmentObject private var model: AppModel
+    @Binding var draft: CueDoc
+
+    var body: some View {
+        Menu {
+            Button("Choose Picture…", action: choose)
+            if draft.image != nil {
+                Button("Remove Picture") { draft.image = nil }
+            }
+        } label: {
+            if let image = model.padImage(for: draft) {
+                Image(nsImage: image)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: 22, height: 22)
+                    .clipShape(RoundedRectangle(cornerRadius: 4))
+            } else {
+                Label("Picture", systemImage: "photo")
+            }
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help("A picture shown on the pad (or drop an image on the pad)")
+    }
+
+    private func choose() {
+        let panel = NSOpenPanel()
+        panel.title = "Choose a picture for the pad"
+        panel.allowedContentTypes = [.image]
+        if panel.runModal() == .OK, let url = panel.url {
+            draft.image = model.storedImagePath(for: url)
+        }
     }
 }

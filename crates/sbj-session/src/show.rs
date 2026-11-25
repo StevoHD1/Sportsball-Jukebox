@@ -114,6 +114,54 @@ pub struct Show {
     /// The game's running order, fired step by step with GO.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub rundown: Vec<RundownItem>,
+    /// Audio files kept with the show for building pads, besides those
+    /// pads already use (see [`Show::library_files`]). Not decoded until a
+    /// pad uses them or they are previewed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub library: Vec<String>,
+    /// Settings given to new pads when audio is dropped on an empty pad.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pad_defaults: Option<PadDefaults>,
+}
+
+/// Settings for new pads (applied by the app when it creates a pad).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PadDefaults {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub fade_in: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fade_out: Option<f64>,
+    #[serde(default, rename = "loop", skip_serializing_if = "is_false")]
+    pub looping: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<String>,
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub output: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duck: Option<f32>,
+    /// Start new pads where the sound starts.
+    #[serde(default = "yes", skip_serializing_if = "is_true")]
+    pub trim_silence: bool,
+    #[serde(default = "yes", skip_serializing_if = "is_true")]
+    pub level_match: bool,
+}
+
+impl Default for PadDefaults {
+    fn default() -> Self {
+        Self {
+            color: None,
+            fade_in: 0.0,
+            fade_out: None,
+            looping: false,
+            group: None,
+            output: 0,
+            duck: None,
+            trim_silence: true,
+            level_match: true,
+        }
+    }
 }
 
 /// Most a quiet file is boosted by level matching, dB.
@@ -219,6 +267,8 @@ impl Default for Show {
             preview_output: None,
             level_match: None,
             rundown: Vec::new(),
+            library: Vec::new(),
+            pad_defaults: None,
         }
     }
 }
@@ -272,9 +322,13 @@ pub struct CueDoc {
     /// Loop the whole cue forever.
     #[serde(default, rename = "loop", skip_serializing_if = "is_false")]
     pub looping: bool,
-    /// Display colour name (UI only).
+    /// Display colour (UI only): a name ("blue") or "#RRGGBB".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color: Option<String>,
+    /// Picture shown on the pad (UI only); found like audio files, and in
+    /// an `Images` folder beside the show.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<String>,
     #[serde(default)]
     pub clips: Vec<ClipDoc>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -373,6 +427,7 @@ impl CueDoc {
             gain: 1.0,
             looping: false,
             color: None,
+            image: None,
             clips: vec![ClipDoc::file(file)],
             markers: Vec::new(),
             midi: None,
@@ -690,11 +745,21 @@ impl Show {
         files.dedup();
         files
     }
+
+    /// The library: files kept with the show plus every file a pad uses.
+    pub fn library_files(&self) -> Vec<String> {
+        let mut files = self.files();
+        files.extend(self.library.iter().cloned());
+        files.sort();
+        files.dedup();
+        files
+    }
 }
 
 /// Finds a referenced file, trying the stored path first and then, if the
 /// show has moved (e.g. copied to another Mac with its audio folder), the
-/// same file name next to the show or in an `Audio` folder beside it.
+/// same file name next to the show or in an `Audio` (or, for pad
+/// pictures, `Images`) folder beside it.
 pub fn resolve_file(file: &str, show_dir: Option<&Path>) -> Option<PathBuf> {
     let path = PathBuf::from(file);
     if path.is_file() {
@@ -708,9 +773,13 @@ pub fn resolve_file(file: &str, show_dir: Option<&Path>) -> Option<PathBuf> {
         }
     }
     let name = path.file_name()?;
-    [dir.join(name), dir.join("Audio").join(name)]
-        .into_iter()
-        .find(|p| p.is_file())
+    [
+        dir.join(name),
+        dir.join("Audio").join(name),
+        dir.join("Images").join(name),
+    ]
+    .into_iter()
+    .find(|p| p.is_file())
 }
 
 /// A problem with one cue, reported to the operator but not fatal.

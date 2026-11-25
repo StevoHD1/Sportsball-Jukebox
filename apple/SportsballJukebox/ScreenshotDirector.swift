@@ -58,6 +58,10 @@ struct ScreenshotDirector {
                 mainWindow()?.setContentSize(NSSize(width: 1480, height: 760))
                 await wait(seconds: 1)
                 capture(mainWindow(), "9-rundown")
+                model.showingLibrary = true
+                await wait(seconds: 1)
+                capture(mainWindow(), "10-library")
+                model.showingLibrary = false
                 model.showingRundown = wasShowing
                 mainWindow()?.setContentSize(NSSize(width: 1280, height: 760))
                 await wait(seconds: 0.5)

@@ -551,9 +551,14 @@ pub unsafe extern "C" fn sbj_session_status_json(session: *const SbjSession) -> 
                 .iter()
                 .map(|p| json!({"slot": p.slot, "message": p.message}))
                 .collect();
-            let preview = session.preview_state().map(
-                |p| json!({"slot": p.slot, "playing": p.playing, "position": p.position_seconds}),
-            );
+            let preview = session.preview_state().map(|p| {
+                json!({
+                    "slot": p.slot,
+                    "file": p.file,
+                    "playing": p.playing,
+                    "position": p.position_seconds,
+                })
+            });
             let mut notices = session.take_notices();
             if let Some(error) = session.take_log_error() {
                 notices.push(error);
@@ -831,6 +836,175 @@ pub unsafe extern "C" fn sbj_session_step_standby(
             SbjStatus::Ok
         })
     }
+}
+
+/// Sets the settings given to new pads from JSON (see the show file's
+/// `pad_defaults`); null or "null" restores the built-in defaults.
+///
+/// # Safety
+/// `session` must be null or a live session; `json` null or a valid
+/// string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sbj_session_set_pad_defaults_json(
+    session: *const SbjSession,
+    json: *const c_char,
+) -> SbjStatus {
+    // SAFETY: forwarded caller contract.
+    let defaults: Option<sbj_session::PadDefaults> = match unsafe { read_str(json) } {
+        Err(status) => return status,
+        Ok(None) => None,
+        Ok(Some(j)) => match serde_json::from_str(j) {
+            Ok(d) => d,
+            Err(e) => return fail(SbjStatus::InvalidArgument, format!("bad pad defaults: {e}")),
+        },
+    };
+    // SAFETY: forwarded caller contract.
+    unsafe {
+        with_session(session, |s| {
+            s.lock().set_pad_defaults(defaults);
+            SbjStatus::Ok
+        })
+    }
+}
+
+/// The show's audio library as JSON: `[{"file", "used_by": [slot],
+/// "loaded", "duration": s|null, "loudness": LUFS|null, "error":
+/// string|null}]`. Free with `sbj_string_free`.
+///
+/// # Safety
+/// `session` must be null or a live session.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sbj_session_library_json(session: *const SbjSession) -> *mut c_char {
+    // SAFETY: forwarded caller contract.
+    unsafe {
+        session_string(session, |s| {
+            let entries: Vec<_> = s
+                .lock()
+                .library_entries()
+                .into_iter()
+                .map(|e| {
+                    json!({
+                        "file": e.file,
+                        "used_by": e.used_by,
+                        "loaded": e.loaded,
+                        "duration": e.duration_seconds,
+                        "loudness": e.loudness_lufs,
+                        "error": e.error,
+                    })
+                })
+                .collect();
+            Ok(serde_json::Value::from(entries).to_string())
+        })
+    }
+}
+
+/// Adds files (a JSON array of paths) to the library without decoding
+/// them; files already there are skipped.
+///
+/// # Safety
+/// `session` must be null or a live session; `json` a valid string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sbj_session_add_to_library_json(
+    session: *const SbjSession,
+    json: *const c_char,
+) -> SbjStatus {
+    // SAFETY: forwarded caller contract.
+    let files: Vec<String> = match unsafe { required_str(json, "json") }.and_then(|j| {
+        serde_json::from_str(j)
+            .map_err(|e| fail(SbjStatus::InvalidArgument, format!("bad file list: {e}")))
+    }) {
+        Ok(files) => files,
+        Err(status) => return status,
+    };
+    // SAFETY: forwarded caller contract.
+    unsafe {
+        with_session(session, |s| {
+            s.lock().add_to_library(files);
+            SbjStatus::Ok
+        })
+    }
+}
+
+/// Removes a file from the library; refused while a pad uses it.
+///
+/// # Safety
+/// `session` must be null or a live session; `file` a valid string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sbj_session_remove_from_library(
+    session: *const SbjSession,
+    file: *const c_char,
+) -> SbjStatus {
+    // SAFETY: forwarded caller contract.
+    let file = match unsafe { required_str(file, "file") } {
+        Ok(f) => f.to_owned(),
+        Err(status) => return status,
+    };
+    // SAFETY: forwarded caller contract.
+    unsafe {
+        with_session(session, |s| {
+            session_status(s.lock().remove_from_library(&file))
+        })
+    }
+}
+
+/// SLOW the first time (decodes the file, outside the session lock):
+/// plays a library file on the preview output; again stops it.
+///
+/// # Safety
+/// `session` must be null or a live session; `file` a valid string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sbj_session_preview_file(
+    session: *const SbjSession,
+    file: *const c_char,
+) -> SbjStatus {
+    // SAFETY: forwarded caller contract.
+    let file = match unsafe { required_str(file, "file") } {
+        Ok(f) => f.to_owned(),
+        Err(status) => return status,
+    };
+    // SAFETY: forwarded caller contract.
+    unsafe {
+        with_session(session, |s| {
+            let report = preload(s, vec![file.clone()]);
+            if let Some((_, why)) = report.failures.first() {
+                return fail(SbjStatus::MediaError, format!("{file}: {why}"));
+            }
+            session_status(s.lock().preview_file(&file))
+        })
+    }
+}
+
+/// Where a file the show refers to (audio, or a pad picture) is on disk,
+/// looking next to the show and in its `Audio` and `Images` folders if the
+/// stored path is gone; NULL (no error) if it cannot be found. Free with
+/// `sbj_string_free`.
+///
+/// # Safety
+/// `session` must be null or a live session; `file` a valid string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sbj_session_resolve_file(
+    session: *const SbjSession,
+    file: *const c_char,
+) -> *mut c_char {
+    // SAFETY: forwarded caller contract.
+    let Ok(file) = (unsafe { required_str(file, "file") }).map(str::to_owned) else {
+        return std::ptr::null_mut();
+    };
+    // SAFETY: forwarded caller contract.
+    let Some(s) = (unsafe { session.as_ref() }) else {
+        set_error("session is null");
+        return std::ptr::null_mut();
+    };
+    catch_unwind(AssertUnwindSafe(|| {
+        let dir = s
+            .lock()
+            .show_path()
+            .and_then(Path::parent)
+            .map(Path::to_path_buf);
+        sbj_session::show::resolve_file(&file, dir.as_deref())
+            .map_or(std::ptr::null_mut(), |p| to_c(p.display().to_string()))
+    }))
+    .unwrap_or(std::ptr::null_mut())
 }
 
 /// Shows bank `bank` (0-based): hotkeys and OSC pad numbers refer to it.

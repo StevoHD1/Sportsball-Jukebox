@@ -14,6 +14,30 @@ mkdir -p "$demo/Audio"
 python3 "$here/demo_audio.py" "$demo/Audio"
 a="$demo/Audio"
 
+# A pad picture (a simple gradient with a ball), standard library only.
+mkdir -p "$demo/Images"
+python3 - "$demo/Images/defense.png" <<'PY'
+import math, struct, sys, zlib
+w = h = 256
+rows = []
+for y in range(h):
+    row = bytearray([0])
+    for x in range(w):
+        d = math.hypot(x - 170, y - 90)
+        if d < 48:
+            r = g = b = 235 if (x + y) % 40 > 6 else 40
+        else:
+            t = y / h
+            r, g, b = int(40 + 120 * t), int(20 + 30 * t), int(90 + 120 * (1 - t))
+        row += bytes((r, g, b))
+    rows.append(bytes(row))
+def chunk(kind, data):
+    return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
+png = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
+png += chunk(b"IDAT", zlib.compress(b"".join(rows), 9)) + chunk(b"IEND", b"")
+open(sys.argv[1], "wb").write(png)
+PY
+
 cat > "$demo/Demo.sbjshow" <<JSON
 {
   "format": "sportsball-jukebox-show",
@@ -24,6 +48,7 @@ cat > "$demo/Demo.sbjshow" <<JSON
   "banks": ["Pregame", "Game", "Postgame"],
   "preview_output": 1,
   "level_match": -16,
+  "pad_defaults": {"color": "teal", "fade_out": 1.0},
   "outputs": [
     {"name": "Arena", "backup": {"id": "unknown", "name": "Null Audio Device"}},
     {"name": "Concourse", "device": {"id": "unknown", "name": "Null Audio Device"}}
@@ -66,8 +91,9 @@ cat > "$demo/Demo.sbjshow" <<JSON
     {"slot": 3, "title": "Crowd Build", "hotkey": "4", "color": "teal", "loop": true,
      "clips": [{"file": "$a/crowd_build.wav"}]},
     {"slot": 4, "title": "DEFENSE!", "hotkey": "5", "color": "purple",
+     "image": "$demo/Images/defense.png",
      "clips": [{"file": "$a/defense.wav"}]},
-    {"slot": 5, "title": "Let's Go!", "hotkey": "6", "color": "pink",
+    {"slot": 5, "title": "Let's Go!", "hotkey": "6", "color": "#E0A21B",
      "clips": [{"file": "$a/lets_go.wav"}]},
     {"slot": 6, "title": "Timeout Music", "hotkey": "q", "color": "green", "group": "Music",
      "fade_in": 0.5,

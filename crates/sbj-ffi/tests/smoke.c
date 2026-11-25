@@ -66,6 +66,22 @@ int main(void) {
     CHECK(info != NULL && strstr(info, "\"loudness\"") != NULL);
     printf("sound info: %s\n", info);
     sbj_string_free(info);
+    CHECK(sbj_session_set_pad_defaults_json(s, "{\"color\":\"#ff0000\",\"fade_in\":0.5}")
+          == SBJ_STATUS_OK);
+    CHECK(sbj_session_set_pad_defaults_json(s, "{\"fade_in\":\"x\"}") == SBJ_STATUS_INVALID_ARGUMENT);
+    CHECK(sbj_session_set_pad_defaults_json(s, NULL) == SBJ_STATUS_OK);
+    char add[512];
+    snprintf(add, sizeof add, "[\"%s\", \"elsewhere.wav\"]", wav);
+    CHECK(sbj_session_add_to_library_json(s, add) == SBJ_STATUS_OK);
+    char *library = sbj_session_library_json(s);
+    CHECK(library != NULL && strstr(library, "elsewhere.wav") != NULL);
+    sbj_string_free(library);
+    CHECK(sbj_session_remove_from_library(s, "elsewhere.wav") == SBJ_STATUS_OK);
+    char *where = sbj_session_resolve_file(s, wav);
+    CHECK(where != NULL);
+    sbj_string_free(where);
+    CHECK(sbj_session_resolve_file(s, "no-such-file.png") == NULL);
+    CHECK(sbj_session_preview_file(s, wav) != SBJ_STATUS_OK); /* no preview output set */
     char *none = sbj_session_sound_info_json(s, "not-loaded.wav");
     CHECK(none != NULL && strcmp(none, "null") == 0);
     sbj_string_free(none);

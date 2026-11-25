@@ -13,7 +13,11 @@ struct ContentView: View {
                 BankBar()
             }
             HStack(spacing: 0) {
-                if model.showingRundown {
+                if model.showingLibrary {
+                    LibraryView()
+                        .frame(maxHeight: .infinity)
+                    Divider()
+                } else if model.showingRundown {
                     RundownView()
                         .frame(maxHeight: .infinity)
                     Divider()
@@ -107,6 +111,14 @@ private struct HeaderBar: View {
             }
 
             Spacer()
+
+            Button {
+                model.showingLibrary.toggle()
+            } label: {
+                Label("Library", systemImage: "music.note.list")
+            }
+            .labelStyle(.iconOnly)
+            .help("Show or hide the audio library (⌥⌘L)")
 
             Button {
                 model.showingRundown.toggle()

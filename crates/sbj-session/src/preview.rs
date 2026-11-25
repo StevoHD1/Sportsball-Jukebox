@@ -13,11 +13,16 @@ use crate::{Result, Session, SessionError, ShowError, show};
 
 /// The player reserved for previews on every output.
 pub(crate) const PREVIEW_PLAYER: PlayerId = PlayerId(MAX_SLOTS * 2);
+/// `PreviewState::slot` while a library file (not a pad) is previewed.
+pub const FILE_PREVIEW: u32 = u32::MAX;
 
 /// What is being previewed, for display.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PreviewState {
+    /// The pad, or [`FILE_PREVIEW`] for a library file.
     pub slot: u32,
+    /// The library file being previewed, if any.
+    pub file: Option<String>,
     pub playing: bool,
     pub position_seconds: f64,
 }
@@ -113,7 +118,52 @@ impl<B: AudioBackend> Session<B> {
         Ok(())
     }
 
+    /// Plays a decoded library file on the preview output, level-matched
+    /// like a new pad would be. Previewing it again stops it.
+    pub fn preview_file(&mut self, file: &str) -> Result<()> {
+        let output = self.show.preview_output.ok_or_else(|| {
+            SessionError::Show(ShowError::Invalid(
+                "no preview output is set (choose one in Audio Outputs)".into(),
+            ))
+        })? as usize;
+        if self.previewing_file.as_deref() == Some(file)
+            && self.preview_state().is_some_and(|p| p.playing)
+        {
+            self.stop_preview();
+            return Ok(());
+        }
+        self.stop_preview();
+        let rate = self
+            .outputs
+            .get(output)
+            .and_then(|o| o.live.as_ref())
+            .map(|l| l.config.sample_rate)
+            .ok_or(SessionError::NoOutput)?;
+        let gain = self.level_gain(&crate::CueDoc::simple(FILE_PREVIEW, "", file), file);
+        let buffer = self
+            .library
+            .get_mut(file)
+            .ok_or_else(|| SessionError::Show(ShowError::Invalid(format!("{file} is not loaded"))))?
+            .at_rate(rate)?;
+        let timeline = Timeline::builder(rate)
+            .clip(Clip::new(buffer).with_gain(gain))
+            .build()
+            .map_err(|e| SessionError::Show(ShowError::Invalid(e.to_string())))?;
+        let live = self.outputs[output]
+            .live
+            .as_mut()
+            .ok_or(SessionError::NoOutput)?;
+        live.controller.load(PREVIEW_PLAYER, timeline)?;
+        live.controller.set_route(PREVIEW_PLAYER, 0, 0)?;
+        live.controller.set_player_gain(PREVIEW_PLAYER, 1.0)?;
+        live.controller.play(PREVIEW_PLAYER)?;
+        self.previewing = Some((FILE_PREVIEW, output));
+        self.previewing_file = Some(file.to_string());
+        Ok(())
+    }
+
     pub fn stop_preview(&mut self) {
+        self.previewing_file = None;
         if let Some((_, output)) = self.previewing.take()
             && let Some(live) = self.outputs.get_mut(output).and_then(|o| o.live.as_mut())
         {
@@ -126,6 +176,7 @@ impl<B: AudioBackend> Session<B> {
         let live = self.outputs.get(output)?.live.as_ref()?;
         Some(PreviewState {
             slot,
+            file: self.previewing_file.clone(),
             playing: live.controller.is_playing(PREVIEW_PLAYER),
             position_seconds: samples_to_seconds(
                 live.controller.position(PREVIEW_PLAYER),

@@ -48,8 +48,27 @@ final class AppModel: ObservableObject {
     @Published var showingPreflight = false
     @Published var showingLog = false
     @Published var showingRundown: Bool = UserDefaults.standard.bool(forKey: "showRundown") {
-        didSet { UserDefaults.standard.set(showingRundown, forKey: "showRundown") }
+        didSet {
+            UserDefaults.standard.set(showingRundown, forKey: "showRundown")
+            if showingRundown { showingLibrary = false }
+        }
     }
+    /// The audio library sidebar (shares the left side with the rundown).
+    @Published var showingLibrary: Bool = UserDefaults.standard.bool(forKey: "showLibrary") {
+        didSet {
+            UserDefaults.standard.set(showingLibrary, forKey: "showLibrary")
+            if showingLibrary { showingRundown = false }
+        }
+    }
+    @Published private(set) var library: [LibraryEntry] = []
+    /// Pad keys and Space are ignored while typing (e.g. in the library
+    /// search field).
+    @Published var suspendHotkeys = false
+    /// From Copy Style, for Paste Style.
+    @Published private(set) var copiedStyle: PadStyle?
+    /// Pad pictures by stored path (not published: filled while drawing).
+    private var imageCache: [String: NSImage] = [:]
+    private var missingImages: Set<String> = []
     @Published var showingNowPlaying: Bool = UserDefaults.standard.object(forKey: "showNowPlaying") as? Bool ?? true {
         didSet { UserDefaults.standard.set(showingNowPlaying, forKey: "showNowPlaying") }
     }
@@ -215,6 +234,10 @@ final class AppModel: ObservableObject {
         if let doc = session.show(), doc != show {
             show = doc
         }
+        let entries = session.library()
+        if entries != library {
+            library = entries
+        }
         refreshStatus()
     }
 
@@ -271,6 +294,8 @@ final class AppModel: ObservableObject {
                     UserDefaults.standard.set(url.path, forKey: Self.lastShowKey)
                     self.durations = [:]
                     self.waveforms = [:]
+                    self.imageCache = [:]
+                    self.missingImages = []
                     self.lastSave = Date()
                 }
                 self.refreshShow()
@@ -527,7 +552,7 @@ final class AppModel: ObservableObject {
             assignSound(url: first, to: slot)
             return
         }
-        var cue = show.cue(at: slot) ?? CueDoc(slot: slot)
+        var cue = show.cue(at: slot) ?? newPad(slot: slot)
         if cue.playlist == nil {
             cue.title = "Playlist"
         }
@@ -654,7 +679,8 @@ final class AppModel: ObservableObject {
     /// output, volume) but gets the new sound.
     func assignSound(url: URL, to slot: Int) {
         let title = url.deletingPathExtension().lastPathComponent
-        var cue = show.cue(at: slot) ?? CueDoc(slot: slot, title: title, file: url.path)
+        let isNew = show.cue(at: slot) == nil
+        var cue = show.cue(at: slot) ?? newPad(slot: slot)
         cue.title = title
         cue.clips = [ClipDoc(file: url.path)]
         cue.markers = []
@@ -662,7 +688,188 @@ final class AppModel: ObservableObject {
         if cue.hotkey == nil {
             cue.hotkey = freeHotkey(preferring: slot)
         }
-        updateCue(cue, trimLeadingSilence: true)
+        let trim = isNew ? (show.padDefaults?.trimSilence ?? true) : true
+        updateCue(cue, trimLeadingSilence: trim)
+    }
+
+    /// An empty pad with the show's defaults for new pads.
+    private func newPad(slot: Int) -> CueDoc {
+        var cue = CueDoc(slot: slot)
+        show.padDefaults?.apply(to: &cue, outputs: show.outputs.count)
+        return cue
+    }
+
+    // MARK: - Pad style and pictures
+
+    func copyStyle(from slot: Int) {
+        copiedStyle = show.cue(at: slot).map(PadStyle.init(cue:))
+    }
+
+    func pasteStyle(to slot: Int) {
+        guard let style = copiedStyle, var cue = show.cue(at: slot) else { return }
+        style.apply(to: &cue, outputs: show.outputs.count)
+        updateCue(cue)
+    }
+
+    /// New pads get this pad's colour, fades, loop, group, output and
+    /// ducking.
+    func useStyleAsDefault(from slot: Int) {
+        guard let cue = show.cue(at: slot) else { return }
+        var defaults = show.padDefaults ?? PadDefaults()
+        defaults.color = cue.color
+        defaults.fadeIn = cue.fadeIn
+        defaults.fadeOut = cue.fadeOut
+        defaults.loop = cue.loop
+        defaults.group = cue.group
+        defaults.output = cue.output
+        defaults.duck = cue.duck
+        defaults.levelMatch = cue.levelMatch
+        setPadDefaults(defaults)
+    }
+
+    func setPadDefaults(_ defaults: PadDefaults?) {
+        report { try session.setPadDefaults(defaults) }
+        refreshShow()
+    }
+
+    func choosePicture(for slot: Int) {
+        let panel = NSOpenPanel()
+        panel.title = "Choose a picture for the pad"
+        panel.allowedContentTypes = [.image]
+        if panel.runModal() == .OK, let url = panel.url {
+            setImage(url, for: slot)
+        }
+    }
+
+    /// Sets (or with nil removes) a pad's picture. Once the show is saved,
+    /// the picture is copied into an Images folder beside it, so it moves
+    /// with the show.
+    func setImage(_ url: URL?, for slot: Int) {
+        guard var cue = show.cue(at: slot) else { return }
+        cue.image = url.map(storedImagePath(for:))
+        updateCue(cue)
+    }
+
+    /// Where a chosen picture is kept: copied beside a saved show.
+    func storedImagePath(for url: URL) -> String {
+        copyIntoShowFolder(url, subfolder: "Images").path
+    }
+
+    private func copyIntoShowFolder(_ url: URL, subfolder: String) -> URL {
+        guard let path = status?.path, !isAutosaveFile(path) else { return url }
+        let folder = URL(fileURLWithPath: path).deletingLastPathComponent()
+            .appendingPathComponent(subfolder, isDirectory: true)
+        if url.deletingLastPathComponent().standardizedFileURL == folder.standardizedFileURL {
+            return url
+        }
+        let destination = folder.appendingPathComponent(url.lastPathComponent)
+        do {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            if !FileManager.default.fileExists(atPath: destination.path) {
+                try FileManager.default.copyItem(at: url, to: destination)
+            }
+            return destination
+        } catch {
+            return url
+        }
+    }
+
+    /// A pad's picture, loaded once (nil if none or not found).
+    func padImage(for cue: CueDoc) -> NSImage? {
+        guard let stored = cue.image else { return nil }
+        if let image = imageCache[stored] { return image }
+        if missingImages.contains(stored) { return nil }
+        guard let path = session.resolveFile(stored), let image = NSImage(contentsOfFile: path) else {
+            missingImages.insert(stored)
+            return nil
+        }
+        imageCache[stored] = image
+        return image
+    }
+
+    // MARK: - Library
+
+    static let audioExtensions: Set<String> = [
+        "wav", "wave", "aif", "aiff", "aifc", "caf", "flac", "mp3", "m4a", "aac", "mp4", "alac", "ogg", "oga",
+    ]
+
+    /// Adds files, and the audio files inside folders, to the library.
+    func addToLibrary(urls: [URL]) {
+        var files: [String] = []
+        for url in urls {
+            var isFolder: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isFolder) else { continue }
+            if isFolder.boolValue {
+                let walker = FileManager.default.enumerator(
+                    at: url, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]
+                )
+                while let item = walker?.nextObject() as? URL {
+                    if Self.audioExtensions.contains(item.pathExtension.lowercased()) {
+                        files.append(item.path)
+                    }
+                }
+            } else if Self.audioExtensions.contains(url.pathExtension.lowercased()) {
+                files.append(url.path)
+            }
+        }
+        guard !files.isEmpty else { return }
+        report { try session.addToLibrary(files.sorted()) }
+        showingLibrary = true
+        refreshShow()
+    }
+
+    func importToLibrary() {
+        let panel = NSOpenPanel()
+        panel.title = "Add to Library"
+        panel.message = "Choose audio files or folders."
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = true
+        panel.allowedContentTypes = [.audio, .folder]
+        if panel.runModal() == .OK {
+            addToLibrary(urls: panel.urls)
+        }
+    }
+
+    func removeFromLibrary(_ file: String) {
+        report { try session.removeFromLibrary(file) }
+        refreshShow()
+    }
+
+    /// The file on disk (it may have moved with the show).
+    func libraryURL(_ file: String) -> URL {
+        URL(fileURLWithPath: session.resolveFile(file) ?? file)
+    }
+
+    @Published private(set) var loadingPreview: String?
+
+    /// Plays a library file in the headphones (decoding it first, in the
+    /// background); again stops it.
+    func previewFile(_ file: String) {
+        guard canPreview else {
+            alert = AlertMessage(
+                title: "No preview output",
+                message: "Choose a preview output (for example headphones) in Audio Outputs."
+            )
+            return
+        }
+        loadingPreview = file
+        let session = self.session
+        Task.detached(priority: .userInitiated) {
+            var failure: String?
+            do {
+                try session.previewFile(file)
+            } catch {
+                failure = error.localizedDescription
+            }
+            let message = failure
+            await MainActor.run {
+                self.loadingPreview = nil
+                if let message {
+                    self.alert = AlertMessage(title: "Could not preview", message: message)
+                }
+                self.refreshShow()
+            }
+        }
     }
 
     /// Below this, leading silence is left alone.
@@ -800,5 +1007,46 @@ final class AppModel: ObservableObject {
         } catch {
             alert = AlertMessage(title: "Something went wrong", message: error.localizedDescription)
         }
+    }
+}
+
+/// What Copy Style / Paste Style carries between pads: look and
+/// behaviour, not the sound, title or key.
+struct PadStyle: Equatable {
+    var color: String?
+    var image: String?
+    var fadeIn: Double
+    var fadeOut: Double?
+    var loop: Bool
+    var group: String?
+    var output: Int
+    var duck: Float?
+    var retrigger: Retrigger
+    var levelMatch: Bool
+
+    init(cue: CueDoc) {
+        color = cue.color
+        image = cue.image
+        fadeIn = cue.fadeIn
+        fadeOut = cue.fadeOut
+        loop = cue.loop
+        group = cue.group
+        output = cue.output
+        duck = cue.duck
+        retrigger = cue.retrigger
+        levelMatch = cue.levelMatch
+    }
+
+    func apply(to cue: inout CueDoc, outputs: Int) {
+        cue.color = color
+        cue.image = image
+        cue.fadeIn = fadeIn
+        cue.fadeOut = fadeOut
+        cue.loop = loop
+        cue.group = group
+        cue.output = output < outputs ? output : 0
+        cue.duck = duck
+        cue.retrigger = retrigger
+        cue.levelMatch = levelMatch
     }
 }
