@@ -182,6 +182,7 @@ private struct HeaderBar: View {
             } label: {
                 Label("Pre-game Check", systemImage: "checklist")
             }
+            .labelStyle(.iconOnly)
             .help("Check devices, files, keys and MIDI before the game")
 
             Button {

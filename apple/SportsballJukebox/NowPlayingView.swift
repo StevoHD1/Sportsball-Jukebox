@@ -55,7 +55,7 @@ struct NowPlayingStrip: View {
             .frame(width: 96, alignment: .leading)
             .padding(.leading, 16)
             ScrollView(.horizontal) {
-                HStack(spacing: 8) {
+                HStack(alignment: .top, spacing: 8) {
                     if model.nowPlaying.isEmpty {
                         Text("Nothing playing")
                             .foregroundStyle(.secondary)
@@ -63,7 +63,7 @@ struct NowPlayingStrip: View {
                     }
                     ForEach(model.nowPlaying) { item in
                         NowPlayingRow(cue: item.cue, state: item.state, compact: true)
-                            .frame(width: 250)
+                            .frame(width: 250, height: 96, alignment: .top)
                     }
                 }
                 .padding(.vertical, 8)
