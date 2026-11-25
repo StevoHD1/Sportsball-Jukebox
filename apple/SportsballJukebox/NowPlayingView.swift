@@ -118,6 +118,8 @@ private struct NowPlayingRow: View {
                     .lineLimit(1)
             }
         }
+        // In the strip, every card fills the same height.
+        .frame(maxWidth: .infinity, maxHeight: compact ? .infinity : nil, alignment: .topLeading)
         .padding(10)
         .background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
         .accessibilityElement(children: .combine)
