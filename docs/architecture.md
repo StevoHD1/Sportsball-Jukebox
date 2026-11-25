@@ -1,6 +1,6 @@
 # Sportsball Jukebox: Architecture
 
-Status: Phase 14 (undo, Save With Audio). Last updated 2026-11-24.
+Status: Phase 15 (pad actions). Last updated 2026-11-24.
 
 ## Goals, in priority order
 
@@ -499,13 +499,31 @@ the pre-game check warns about steps on empty pads.
   names (nothing reloads or stops). Missing files are skipped and
   reported. The folder then opens anywhere.
 
+## Pad actions (Phase 15)
+
+Each pad has a **play mode** (`play_mode`): follow the bank's Multiplay
+(default), **over** (never fades other pads, and single-play hand-overs
+leave it alone, e.g. horns over music) or **solo** (fades out the bank's
+other pads even in a Multiplay bank). And a list of **actions**
+(`on_fire`, `sbj-session/src/actions.rs`) run in order each time it
+starts, however it was fired (including rundown and marker starts):
+stop other pads (all, or this bank; with a fade), fire a pad (now, or
+after a delay, timed on the control side within a poll), stop a pad,
+duck everything else by N dB for X seconds (folded into the ducking
+calculation, which also handles per-pad ducking; the deepest wins), and
+switch bank. Pads started by actions are logged as `action`. Nesting is
+capped at four levels, so pads that fire each other can't loop. Action
+targets follow pads that move or are renumbered, the pre-game check
+flags actions on empty pads, and pads with actions show a ⚡ tag whose
+tooltip lists them.
+
 ## Play log (Phase 7)
 
 `sbj-session/src/log.rs` records each time a pad or playlist song starts:
 the time, game name, show, bank and pad, title, the audio file, the
 sponsor (a per-pad field), the output, and what triggered it (`operator`,
-`midi`, `osc`, `remote`, `marker`, `rundown`, or `auto` for playlist
-auto-advance). Entries close when
+`midi`, `osc`, `remote`, `marker`, `rundown`, `action`, or `auto` for
+playlist auto-advance). Entries close when
 the sound stops, finishes or is replaced, and the time played is
 measured on the wall clock. Closed entries are appended as JSON lines to
 `<log dir>/YYYY-MM-DD.jsonl` (UTC days) straight away, so a crash loses
@@ -671,6 +689,11 @@ CI.
 **Phase 14: Undo and Save With Audio (built; awaiting Mac testing)**
 - Edit → Undo / Redo for show edits, reloading only what changed.
 - File → Save With Audio… makes a self-contained show folder.
+
+**Phase 15: Pad actions (built; awaiting Mac testing)**
+- Play mode per pad (follow bank / play over / solo).
+- On-fire actions: stop others, fire or stop a pad (with delay/fade),
+  duck everything else for a while, switch bank; ⚡ tag on the pad.
 
 **Next candidates**
 - Signed releases once there is a Developer account.

@@ -29,6 +29,7 @@ use sbj_engine::{
 };
 use sbj_media::MediaError;
 
+mod actions;
 mod collect;
 pub mod control;
 mod library;
@@ -53,9 +54,9 @@ pub use control::{ControlMessage, LearnTarget, MidiMessage};
 pub use preflight::{Check, CheckLevel, Preflight};
 pub use show::{
     ActionDoc, ActionKind, ClipDoc, ControlsDoc, CueDoc, CueProblem, CurveDoc, DEFAULT_FADE_OUT,
-    DeviceRef, MAX_PADS_PER_BANK, MAX_SLOTS, MarkerDoc, MidiKind, MidiTrigger, OutputDoc,
-    PadDefaults, PadTarget, PlaylistDoc, Retrigger, RouteDoc, RundownItem, Show, ShowError,
-    TargetDoc,
+    DeviceRef, FireAction, FireActionKind, MAX_PADS_PER_BANK, MAX_SLOTS, MarkerDoc, MidiKind,
+    MidiTrigger, OutputDoc, PadDefaults, PadTarget, PlayMode, PlaylistDoc, Retrigger, RouteDoc,
+    RundownItem, Show, ShowError, TargetDoc,
 };
 
 /// How often to retry an output whose devices are all unavailable.
@@ -358,6 +359,12 @@ pub struct Session<B: AudioBackend> {
     /// Pads in the order they last started (for Fade Last / Stop Last).
     fire_order: Vec<u32>,
     history: undo::UndoHistory,
+    /// "Duck others for X seconds" actions in effect.
+    timed_ducks: Vec<actions::TimedDuck>,
+    /// "Fire pad after X seconds" actions waiting.
+    scheduled_fires: Vec<(Instant, u32)>,
+    /// How deep pad actions are nested (A fires B fires C), to stop loops.
+    action_depth: u8,
     playlists: HashMap<u32, playlist::PlaylistState>,
     /// The pad being previewed, and on which output.
     previewing: Option<(u32, usize)>,
@@ -395,6 +402,9 @@ impl<B: AudioBackend> Session<B> {
             recent_fires: HashMap::new(),
             fire_order: Vec::new(),
             history: undo::UndoHistory::default(),
+            timed_ducks: Vec::new(),
+            scheduled_fires: Vec::new(),
+            action_depth: 0,
             playlists: HashMap::new(),
             previewing: None,
             previewing_file: None,
@@ -1046,6 +1056,13 @@ impl<B: AudioBackend> Session<B> {
         for item in &mut self.show.rundown {
             item.pad = item.pad.map(&map);
         }
+        for cue in &mut self.show.cues {
+            for action in &mut cue.on_fire {
+                if action.target_pad().is_some() {
+                    action.pad = action.pad.map(&map);
+                }
+            }
+        }
         let mut changed = Vec::new();
         for cue in &mut self.show.cues {
             let mut touched = false;
@@ -1292,6 +1309,7 @@ impl<B: AudioBackend> Session<B> {
             live.controller.collect_garbage();
         }
         self.handle_marker_events(&reached);
+        self.run_scheduled_fires();
         self.log.source = "auto";
         self.advance_playlists();
         self.log.source = "operator";

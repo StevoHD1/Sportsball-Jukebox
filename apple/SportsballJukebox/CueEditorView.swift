@@ -1335,6 +1335,7 @@ private struct PlaybackRow: View {
                 }
             }
             .frame(width: 200)
+            ActionsButton(draft: $draft)
     }
 
     /// Stereo pairs, then single channels.
@@ -1507,5 +1508,168 @@ private struct PictureButton: View {
         if panel.runModal() == .OK, let url = panel.url {
             draft.image = model.storedImagePath(for: url)
         }
+    }
+}
+
+// MARK: - Pad actions
+
+/// "Actions…": the pad's play mode and what it does when it starts.
+private struct ActionsButton: View {
+    @Binding var draft: CueDoc
+    @State private var showing = false
+
+    var body: some View {
+        Button {
+            showing = true
+        } label: {
+            Label(title, systemImage: draft.hasActions ? "bolt.fill" : "bolt")
+        }
+        .help("Play mode, and actions run when the pad starts (stop others, fire a pad, duck, switch bank)")
+        .popover(isPresented: $showing, arrowEdge: .bottom) {
+            ActionsEditor(draft: $draft)
+        }
+    }
+
+    private var title: String {
+        let count = draft.onFire.count + (draft.playMode == .bank ? 0 : 1)
+        return count == 0 ? "Actions…" : "Actions (\(count))…"
+    }
+}
+
+private struct ActionsEditor: View {
+    @EnvironmentObject private var model: AppModel
+    @Binding var draft: CueDoc
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Pad Actions").font(.headline)
+            Picker("Play mode", selection: $draft.playMode) {
+                ForEach(PlayMode.allCases, id: \.self) { mode in
+                    Text(mode.label).tag(mode)
+                }
+            }
+            .frame(width: 420)
+            Divider()
+            Text("When this pad starts").font(.subheadline.weight(.semibold))
+            if draft.onFire.isEmpty {
+                Text("Nothing else happens.")
+                    .foregroundStyle(.secondary)
+            }
+            ForEach($draft.onFire) { $action in
+                ActionRow(action: $action, slot: draft.slot) {
+                    draft.onFire.removeAll { $0.id == action.id }
+                }
+            }
+            Menu("Add Action") {
+                ForEach(FireActionKind.allCases, id: \.self) { kind in
+                    Button(kind.label) { draft.onFire.append(FireAction(kind: kind)) }
+                }
+            }
+            .fixedSize()
+            Text("Actions run in order each time the pad starts, however it's fired (key, click, MIDI, OSC, remote, rundown, marker). Pads with actions show ⚡.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(16)
+        .frame(width: 600)
+    }
+}
+
+private struct ActionRow: View {
+    @EnvironmentObject private var model: AppModel
+    @Binding var action: FireAction
+    let slot: Int
+    let onRemove: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Text(action.kind.label)
+                .frame(width: 150, alignment: .leading)
+            switch action.kind {
+            case .stopOthers:
+                Toggle("This bank only", isOn: thisBank)
+                seconds("Fade", fallback: 1)
+            case .firePad:
+                padPicker
+                seconds("After", fallback: 0)
+            case .stopPad:
+                padPicker
+                Toggle("Its own fade", isOn: ownFade)
+                if !ownFade.wrappedValue {
+                    seconds("Fade", fallback: 0.5)
+                }
+            case .duck:
+                Text("by")
+                TextField("", value: db, format: .number.precision(.fractionLength(0)))
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 44)
+                Text("dB")
+                seconds("for", fallback: 5)
+            case .bank:
+                Picker("Bank", selection: bank) {
+                    ForEach(Array(model.show.banks.enumerated()), id: \.offset) { index, name in
+                        Text(name).tag(index)
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 160)
+            }
+            Spacer(minLength: 0)
+            Button(role: .destructive, action: onRemove) {
+                Image(systemName: "minus.circle.fill")
+            }
+            .buttonStyle(.borderless)
+            .help("Remove this action")
+        }
+    }
+
+    private var padPicker: some View {
+        Picker("Pad", selection: $action.pad) {
+            Text("Choose a pad…").tag(Int?.none)
+            ForEach(model.show.cues.filter { $0.slot != slot }.sorted { $0.slot < $1.slot }, id: \.slot) { cue in
+                Text(padLabel(cue)).tag(Int?.some(cue.slot))
+            }
+        }
+        .labelsHidden()
+        .frame(width: 200)
+    }
+
+    private func padLabel(_ cue: CueDoc) -> String {
+        let slots = max(model.show.slots, 1)
+        let title = cue.title.isEmpty ? "Pad \(cue.slot % slots + 1)" : cue.title
+        guard model.show.banks.count > 1 else { return title }
+        let bankIndex = cue.slot / slots
+        let name = model.show.banks.indices.contains(bankIndex) ? model.show.banks[bankIndex] : "Bank \(bankIndex + 1)"
+        return "\(name) · \(title)"
+    }
+
+    private func seconds(_ label: String, fallback value: Double) -> some View {
+        HStack(spacing: 4) {
+            Text(label)
+            TextField("", value: Binding(
+                get: { action.seconds ?? value },
+                set: { action.seconds = max($0, 0) }
+            ), format: .number.precision(.fractionLength(0...2)))
+            .textFieldStyle(.roundedBorder)
+            .frame(width: 50)
+            Text("s").foregroundStyle(.secondary)
+        }
+    }
+
+    private var thisBank: Binding<Bool> {
+        Binding(get: { action.thisBank ?? false }, set: { action.thisBank = $0 ? true : nil })
+    }
+
+    private var ownFade: Binding<Bool> {
+        Binding(get: { action.seconds == nil }, set: { action.seconds = $0 ? nil : 0.5 })
+    }
+
+    private var db: Binding<Double> {
+        Binding(get: { action.db ?? -12 }, set: { action.db = min(max($0, -60), 0) })
+    }
+
+    private var bank: Binding<Int> {
+        Binding(get: { action.bank ?? 0 }, set: { action.bank = $0 })
     }
 }

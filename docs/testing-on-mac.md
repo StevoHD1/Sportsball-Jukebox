@@ -289,6 +289,18 @@ built-in speakers or headphones)
       that folder to a USB stick or another Mac and open the show there:
       every pad, picture and library file is found.
 
+**Phase 15: pad actions**
+- [ ] Turn Multiplay off for a bank. Open a horn pad's editor →
+      Actions… → Play mode "Play over everything". Fire the music, then
+      the horn: the music keeps playing. Fire another pad: the music hands
+      over, the horn carries on. The horn shows ⚡ and its tooltip says why.
+- [ ] Set a pad to "Solo" in a Multiplay bank: firing it fades out the
+      bank's other pads.
+- [ ] Add actions to a pad: Stop other pads; Fire a pad after 2 s; Duck
+      everything else -15 dB for 4 s; Switch to bank. Fire it from a key,
+      MIDI and the rundown: each time all of them happen, in order.
+- [ ] Make two pads fire each other: firing one doesn't hang the app.
+
 **Stress**
 - [ ] Leave a looping cue running for 10+ minutes. The status line should
       not start showing "glitches".

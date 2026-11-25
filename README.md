@@ -5,7 +5,7 @@ as a native macOS app. Inspired by Sports Sounds Pro, it adds
 sample-accurate timeline markers with actions (loop, jump, pause, fade) and
 support for several audio interfaces at once.
 
-**Status:** Phase 14; v0.2.0 is being tested on a Mac. A Mac app with:
+**Status:** Phase 15; v0.3.0 is being tested on a Mac. A Mac app with:
 - a configurable pad grid with hotkeys and colours;
 - show files that autosave;
 - several audio interfaces at once, with automatic failover to a backup;
@@ -24,7 +24,10 @@ support for several audio interfaces at once.
 - a game rundown fired step by step with GO (Space, MIDI, OSC or the
   phone remote);
 - an audio library to build pads from, custom pad colours and pictures,
-  copy/paste of pad styles, and defaults for new pads.
+  copy/paste of pad styles, and defaults for new pads;
+- pad actions: play over / solo per pad, and actions when a pad fires
+  (stop others, fire or stop a pad, duck everything else, switch bank);
+- undo/redo, and Save With Audio for a portable show folder.
 
 Requires macOS 14.2+. To install, see [docs/install.md](docs/install.md);
 to try everything, [docs/testing-on-mac.md](docs/testing-on-mac.md). The

@@ -137,6 +137,7 @@ struct CueButton: View {
             parts.append("Not ready")
         }
         if let key = cue?.hotkey { parts.append("Key \(key.uppercased())") }
+        if cue?.hasActions == true { parts.append("Has actions") }
         if !problems.isEmpty { parts.append("Has problems") }
         return parts.joined(separator: ", ")
     }
@@ -150,7 +151,10 @@ struct CueButton: View {
 
     private var helpText: String {
         guard let cue else { return "Click or drop an audio file to assign a sound" }
-        return ([cue.title] + problems).joined(separator: "\n")
+        var lines = [cue.title]
+        if cue.playMode != .bank { lines.append("⚡ " + cue.playMode.label) }
+        lines += cue.onFire.map { "⚡ " + $0.describe(in: model.show) }
+        return (lines + problems).joined(separator: "\n")
     }
 
     @ViewBuilder
@@ -289,6 +293,14 @@ private struct PadFace: View {
                     .padding(.vertical, 1)
                     .background(Color.orange, in: Capsule())
                     .foregroundStyle(.black)
+            }
+            if cue?.hasActions == true {
+                // Plays over / solo, or runs actions when fired.
+                Image(systemName: "bolt.fill")
+                    .font(.caption)
+                    .padding(3)
+                    .background(Color.black.opacity(0.3), in: Circle())
+                    .accessibilityLabel("Has actions")
             }
             if hasProblems {
                 Image(systemName: "exclamationmark.triangle.fill")

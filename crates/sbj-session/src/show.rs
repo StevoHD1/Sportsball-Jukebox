@@ -376,6 +376,86 @@ pub struct CueDoc {
     /// pad's files exactly as they are, e.g. a deliberately quiet bed.
     #[serde(default = "yes", skip_serializing_if = "is_true")]
     pub level_match: bool,
+    /// How this pad treats its bank's Multiplay setting.
+    #[serde(default, skip_serializing_if = "is_default_play_mode")]
+    pub play_mode: PlayMode,
+    /// Actions run, in order, each time the pad starts.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub on_fire: Vec<FireAction>,
+}
+
+/// How a pad treats its bank's Multiplay setting.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlayMode {
+    /// As the bank says.
+    #[default]
+    Bank,
+    /// Plays over everything: never fades other pads out, and isn't faded
+    /// out when another pad in a single-play bank fires (horns, stings).
+    Over,
+    /// Fades out the bank's other pads when fired, even in a Multiplay
+    /// bank.
+    Solo,
+}
+
+fn is_default_play_mode(m: &PlayMode) -> bool {
+    *m == PlayMode::Bank
+}
+
+/// What a pad action does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FireActionKind {
+    /// Stop every other playing pad (or only this bank's, with
+    /// `this_bank`), over `seconds` (default: the Stop All fade).
+    StopOthers,
+    /// Fire `pad`, after `seconds` (default now).
+    FirePad,
+    /// Stop `pad` over `seconds` (default: its own fade-out).
+    StopPad,
+    /// Lower every other pad by `db` for `seconds`, then bring it back.
+    Duck,
+    /// Show bank `bank` (0-based).
+    Bank,
+}
+
+/// One action a pad runs when it starts. Flat, like [`ActionDoc`].
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct FireAction {
+    pub kind: FireActionKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pad: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seconds: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub db: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bank: Option<u32>,
+    /// StopOthers: only pads in the same bank.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub this_bank: bool,
+}
+
+impl FireAction {
+    pub fn new(kind: FireActionKind) -> Self {
+        Self {
+            kind,
+            pad: None,
+            seconds: None,
+            db: None,
+            bank: None,
+            this_bank: false,
+        }
+    }
+
+    /// The pad this action fires or stops, if any.
+    pub fn target_pad(&self) -> Option<u32> {
+        match self.kind {
+            FireActionKind::FirePad | FireActionKind::StopPad => self.pad,
+            _ => None,
+        }
+    }
 }
 
 /// Default pad fade-out when none is set, seconds.
@@ -448,6 +528,8 @@ impl CueDoc {
             playlist: None,
             sponsor: None,
             level_match: true,
+            play_mode: PlayMode::Bank,
+            on_fire: Vec::new(),
         }
     }
 

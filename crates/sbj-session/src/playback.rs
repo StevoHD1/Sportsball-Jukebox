@@ -25,6 +25,7 @@ impl<B: AudioBackend> Session<B> {
             if self.fire_playlist(slot, &cue)? {
                 self.single_play_handover(slot);
                 self.after_start(slot, &cue);
+                self.run_fire_actions(slot);
             }
             return Ok(());
         }
@@ -64,6 +65,7 @@ impl<B: AudioBackend> Session<B> {
         self.log_start(slot, None);
         self.single_play_handover(slot);
         self.after_start(slot, &cue);
+        self.run_fire_actions(slot);
         Ok(())
     }
 
@@ -119,6 +121,7 @@ impl<B: AudioBackend> Session<B> {
                     self.log.source = "marker";
                     self.log_start(slot, None);
                     self.after_start(slot, &cue);
+                    self.run_fire_actions(slot);
                 }
                 Event::MarkerReached { player, marker, .. } => {
                     let Some(source) = self.show.cue(player.0) else {
@@ -182,6 +185,13 @@ impl<B: AudioBackend> Session<B> {
         }
         self.recent_fires
             .retain(|_, fired| fired.elapsed() < START_GRACE);
+        let now = Instant::now();
+        self.expire_timed_ducks(now);
+        let timed: std::collections::HashMap<u32, f32> = self
+            .loaded
+            .keys()
+            .map(|&slot| (slot, self.timed_duck_db(slot, now)))
+            .collect();
         let loaded: Vec<(u32, usize)> = self.loaded.iter().map(|(s, l)| (*s, l.output)).collect();
 
         for output in 0..self.outputs.len() {
@@ -194,7 +204,6 @@ impl<B: AudioBackend> Session<B> {
                     duck_db = duck_db.min(db.min(0.0));
                 }
             }
-            let factor = 10f32.powf(duck_db / 20.0);
 
             let Some(live) = self.outputs[output].live.as_mut() else {
                 continue;
@@ -207,8 +216,12 @@ impl<B: AudioBackend> Session<B> {
                 let Some(cue) = self.show.cues.iter().find(|c| c.slot == slot) else {
                     continue;
                 };
-                // A ducking cue is never ducked itself.
-                let target = if cue.duck.is_some() { 1.0 } else { factor };
+                // A ducking cue is never ducked by ducking cues; "duck
+                // others for X seconds" actions lower every pad but their
+                // own. The deepest applies.
+                let cue_db = if cue.duck.is_some() { 0.0 } else { duck_db };
+                let timed_db = timed.get(&slot).copied().unwrap_or(0.0);
+                let target = 10f32.powf(cue_db.min(timed_db) / 20.0);
                 let current = self.duck_applied.get(&slot).copied().unwrap_or(1.0);
                 if (current - target).abs() < 1e-6 {
                     continue;
