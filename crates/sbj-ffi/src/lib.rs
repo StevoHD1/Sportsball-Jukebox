@@ -570,6 +570,8 @@ pub unsafe extern "C" fn sbj_session_status_json(session: *const SbjSession) -> 
                 "preview": preview,
                 "bank": session.current_bank(),
                 "standby": session.standby(),
+                "undo": session.undo_label(),
+                "redo": session.redo_label(),
                 "last": session.last_playing(),
                 "single_play": session.show().single_play,
                 "learning": session.learning().map(target_name),
@@ -660,6 +662,107 @@ pub unsafe extern "C" fn sbj_session_save_show(
             session_status(session.save_show(&path))
         })
     }
+}
+
+/// SLOW: saves the show to `path` with copies of every file it uses
+/// (pads, playlists, the library, pad pictures) in `Audio` and `Images`
+/// folders beside it, and points the show at those copies, so that folder
+/// can be moved anywhere. Copying happens without holding the session, so
+/// pads keep firing. Files that can't be found are skipped and reported as
+/// a notice.
+///
+/// # Safety
+/// `session` must be null or a live session; `path` a valid string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sbj_session_save_with_audio(
+    session: *const SbjSession,
+    path: *const c_char,
+) -> SbjStatus {
+    // SAFETY: forwarded caller contract.
+    let path = match unsafe { required_str(path, "path") } {
+        Ok(p) => PathBuf::from(p),
+        Err(status) => return status,
+    };
+    let Some(folder) = path.parent().map(Path::to_path_buf) else {
+        return fail(SbjStatus::InvalidArgument, "the show path has no folder");
+    };
+    // SAFETY: forwarded caller contract.
+    unsafe {
+        with_session(session, |s| {
+            if let Err(e) = std::fs::create_dir_all(&folder) {
+                return fail(
+                    SbjStatus::ShowError,
+                    format!("could not create the folder: {e}"),
+                );
+            }
+            let plan = s.lock().collect_plan(&folder);
+            if let Err(e) = plan.copy() {
+                return fail(
+                    SbjStatus::ShowError,
+                    format!("could not copy the audio: {e}"),
+                );
+            }
+            let mut session = s.lock();
+            session.apply_collect(&plan);
+            session_status(session.save_show(&path))
+        })
+    }
+}
+
+/// Undoes the last recorded show edit (see `sbj_session_record_undo`).
+/// Nothing to undo is not an error.
+///
+/// # Safety
+/// `session` must be null or a live session.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sbj_session_undo(session: *const SbjSession) -> SbjStatus {
+    // SAFETY: forwarded caller contract.
+    unsafe {
+        with_session(session, |s| {
+            s.lock().undo();
+            SbjStatus::Ok
+        })
+    }
+}
+
+/// Redoes the last undone edit.
+///
+/// # Safety
+/// `session` must be null or a live session.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sbj_session_redo(session: *const SbjSession) -> SbjStatus {
+    // SAFETY: forwarded caller contract.
+    unsafe {
+        with_session(session, |s| {
+            s.lock().redo();
+            SbjStatus::Ok
+        })
+    }
+}
+
+/// Marks the show's changes since the last mark as one undoable step
+/// named `label` (e.g. "Paste Style"). Returns true if anything changed
+/// (and so a step was recorded).
+///
+/// # Safety
+/// `session` must be null or a live session; `label` null or a valid
+/// string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sbj_session_record_undo(
+    session: *const SbjSession,
+    label: *const c_char,
+) -> bool {
+    // SAFETY: forwarded caller contract.
+    let label = match unsafe { read_str(label) } {
+        Ok(l) => l.unwrap_or("Change").to_owned(),
+        Err(_) => return false,
+    };
+    // SAFETY: forwarded caller contract.
+    let Some(s) = (unsafe { session.as_ref() }) else {
+        set_error("session is null");
+        return false;
+    };
+    catch_unwind(AssertUnwindSafe(|| s.lock().record_undo(&label))).unwrap_or(false)
 }
 
 /// Sets the show's name and grid from JSON:

@@ -1,6 +1,6 @@
 # Sportsball Jukebox: Architecture
 
-Status: Phase 13 (layout and live transport). Last updated 2026-11-24.
+Status: Phase 14 (undo, Save With Audio). Last updated 2026-11-24.
 
 ## Goals, in priority order
 
@@ -479,6 +479,26 @@ the pre-game check warns about steps on empty pads.
   on the right; the library, rundown and Now Playing columns are
   resizable.
 
+## Undo and Save With Audio (Phase 14)
+
+- **Undo** (`sbj-session/src/undo.rs`): the app marks each user action
+  (`record_undo("Paste Style")`); if the show document changed since the
+  last mark, the previous document is pushed (50 steps). Undo/redo swap
+  whole documents, then reload only the pads whose settings differ (plus
+  pads whose markers reach them; everything if outputs, pads per bank or
+  level matching changed), so untouched pads keep playing. The app hangs
+  this on the window's `UndoManager`, so Edit → Undo "Paste Style" and ⌘Z
+  behave like any Mac app, and text fields keep their own undo. Opening
+  or creating a show clears the history.
+- **Save With Audio** (`collect.rs`): plans copies of every file the show
+  uses (pads, playlists, library, pictures) into `Audio/` and `Images/`
+  beside the chosen show file, giving clashing names a number; copies
+  without holding the session (pads keep firing), via a temporary name so
+  a failed copy never leaves half a file; then rewrites the show's paths
+  relative to the folder and re-files the decoded audio under the new
+  names (nothing reloads or stops). Missing files are skipped and
+  reported. The folder then opens anywhere.
+
 ## Play log (Phase 7)
 
 `sbj-session/src/log.rs` records each time a pad or playlist song starts:
@@ -647,6 +667,10 @@ CI.
   top; resizable side panels.
 - Scrub bars in Now Playing; floating preview player with scrubbing.
 - Fade Last / Stop Last; Multiplay switch per bank.
+
+**Phase 14: Undo and Save With Audio (built; awaiting Mac testing)**
+- Edit → Undo / Redo for show edits, reloading only what changed.
+- File → Save With Audio… makes a self-contained show folder.
 
 **Next candidates**
 - Signed releases once there is a Developer account.

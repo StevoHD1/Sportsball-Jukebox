@@ -22,6 +22,8 @@ struct SportsballJukeboxApp: App {
                     .keyboardShortcut("s")
                 Button("Save As…") { model.saveAs() }
                     .keyboardShortcut("s", modifiers: [.command, .shift])
+                Button("Save With Audio…") { model.saveWithAudio() }
+                    .keyboardShortcut("s", modifiers: [.command, .option])
             }
             CommandMenu("Show") {
                 Button("Audio Outputs…") { model.showingOutputs = true }

@@ -192,6 +192,27 @@ final class EngineSession: @unchecked Sendable {
         try Engine.check(sbj_session_set_show_settings_json(handle, json))
     }
 
+    // MARK: Undo and Save With Audio
+
+    /// Marks the show's changes since the last mark as one undo step.
+    /// Returns whether anything changed.
+    func recordUndo(_ label: String) -> Bool {
+        sbj_session_record_undo(handle, label)
+    }
+
+    func undo() throws {
+        try Engine.check(sbj_session_undo(handle))
+    }
+
+    func redo() throws {
+        try Engine.check(sbj_session_redo(handle))
+    }
+
+    /// Slow: copies every file the show uses beside `url` and saves there.
+    func saveWithAudio(to url: URL) throws {
+        try Engine.check(sbj_session_save_with_audio(handle, url.path))
+    }
+
     // MARK: Live transport
 
     func seekCue(slot: Int, seconds: Double) throws {

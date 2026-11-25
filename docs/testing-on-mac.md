@@ -276,6 +276,19 @@ built-in speakers or headphones)
       the preview player appears bottom right. Click or drag its bar to
       hear the middle or end; ⏮ restarts; ✕ stops.
 
+**Phase 14: undo and Save With Audio**
+- [ ] Paste Style onto a pad, then Edit → Undo Paste Style (⌘Z): it's
+      back as it was. ⇧⌘Z redoes it. Try Clear Pad, dragging pads to swap,
+      and dropping a new sound on a pad, then undo each.
+- [ ] While a pad plays, change and undo a different pad: the playing pad
+      carries on.
+- [ ] Typing in a pad's title and pressing ⌘Z undoes the typing, not a
+      show change.
+- [ ] File → Save With Audio… (⌥⌘S): pick a name. A folder appears with
+      the show, Audio and Images; pads keep firing while it copies. Copy
+      that folder to a USB stick or another Mac and open the show there:
+      every pad, picture and library file is found.
+
 **Stress**
 - [ ] Leave a looping cue running for 10+ minutes. The status line should
       not start showing "glitches".

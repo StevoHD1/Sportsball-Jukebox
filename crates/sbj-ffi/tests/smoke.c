@@ -157,6 +157,13 @@ int main(void) {
     sbj_string_free(preflight);
     CHECK(sbj_session_enable_midi(s, false) == SBJ_STATUS_OK);
     CHECK(sbj_session_save_show(s, show_path) == SBJ_STATUS_OK);
+    (void)sbj_session_record_undo(s, "Smoke");
+    CHECK(sbj_session_undo(s) == SBJ_STATUS_OK);
+    CHECK(sbj_session_redo(s) == SBJ_STATUS_OK);
+    CHECK(sbj_session_save_with_audio(s, "sbj_smoke_collect/Collected.sbjshow") == SBJ_STATUS_OK);
+    FILE *collected = fopen("sbj_smoke_collect/Audio/sbj_smoke_test.wav", "rb");
+    CHECK(collected != NULL);
+    fclose(collected);
     CHECK(sbj_session_new_show(s) == SBJ_STATUS_OK);
     CHECK(sbj_session_cue_states(s, 3, 1, states) == SBJ_STATUS_OK && !states[0].assigned);
     CHECK(sbj_session_open_show(s, show_path) == SBJ_STATUS_OK);
@@ -180,6 +187,10 @@ int main(void) {
           SBJ_STATUS_OK);
     remove(show_path);
     remove(wav);
+    remove("sbj_smoke_collect/Audio/sbj_smoke_test.wav");
+    remove("sbj_smoke_collect/Audio");
+    remove("sbj_smoke_collect/Collected.sbjshow");
+    remove("sbj_smoke_collect");
 
     CHECK(sbj_session_open_show(s, "missing.sbjshow") == SBJ_STATUS_SHOW_ERROR);
     CHECK(sbj_session_fire_cue(s, 999) == SBJ_STATUS_INVALID_ARGUMENT);

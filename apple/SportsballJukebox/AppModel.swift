@@ -230,7 +230,12 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func refreshShow() {
+    /// Re-reads the show after a change. `undo` names the change as an
+    /// undoable step (Edit → Undo <name>) if it altered the show.
+    func refreshShow(undo label: String = "Change") {
+        if !applyingUndo, session.recordUndo(label) {
+            registerUndo(label)
+        }
         if let doc = session.show(), doc != show {
             show = doc
         }
@@ -258,6 +263,7 @@ final class AppModel: ObservableObject {
         }
         report { try session.newShow() }
         UserDefaults.standard.removeObject(forKey: Self.lastShowKey)
+        clearUndo()
         refreshShow()
     }
 
@@ -297,6 +303,7 @@ final class AppModel: ObservableObject {
                     self.imageCache = [:]
                     self.missingImages = []
                     self.lastSave = Date()
+                    self.clearUndo()
                 }
                 self.refreshShow()
             }
@@ -369,7 +376,7 @@ final class AppModel: ObservableObject {
         for file in soundInfos.keys {
             soundInfos[file] = session.soundInfo(file: file)
         }
-        refreshShow()
+        refreshShow(undo: "Show Settings")
     }
 
     // MARK: - Layout (per Mac, not saved in the show)
@@ -404,6 +411,90 @@ final class AppModel: ObservableObject {
         padHeight = min(max(padHeight + step, Self.padHeights.lowerBound), Self.padHeights.upperBound)
     }
 
+    // MARK: - Undo
+
+    /// The window's undo manager (set by ContentView), so Edit → Undo and
+    /// ⌘Z work as on any Mac app, with "Undo Paste Style" and so on.
+    weak var undoManager: UndoManager?
+    private var applyingUndo = false
+
+    private func registerUndo(_ label: String) {
+        guard let undoManager else { return }
+        undoManager.registerUndo(withTarget: self) { model in
+            MainActor.assumeIsolated { model.undoStep(label) }
+        }
+        undoManager.setActionName(label)
+    }
+
+    private func undoStep(_ label: String) {
+        applyingUndo = true
+        report { try session.undo() }
+        refreshShow()
+        applyingUndo = false
+        // Registered while undoing, so it becomes the redo.
+        undoManager?.registerUndo(withTarget: self) { model in
+            MainActor.assumeIsolated { model.redoStep(label) }
+        }
+        undoManager?.setActionName(label)
+    }
+
+    private func redoStep(_ label: String) {
+        applyingUndo = true
+        report { try session.redo() }
+        refreshShow()
+        applyingUndo = false
+        registerUndo(label)
+    }
+
+    /// A different show: nothing from the old one can be undone.
+    private func clearUndo() {
+        undoManager?.removeAllActions()
+    }
+
+    // MARK: - Save With Audio
+
+    /// Shown over the window while something slow runs (e.g. copying).
+    @Published private(set) var busyMessage: String?
+
+    /// Saves the show into a new folder together with copies of every file
+    /// it uses (Audio and Images folders), so the folder can be moved to
+    /// another Mac or a USB stick.
+    func saveWithAudio() {
+        let panel = NSSavePanel()
+        panel.title = "Save With Audio"
+        panel.message = "Creates a folder with the show and copies of all its audio and pictures."
+        panel.nameFieldStringValue = show.name.isEmpty ? "Untitled Show" : show.name
+        panel.allowedContentTypes = [.sportsballShow]
+        guard panel.runModal() == .OK, let chosen = panel.url else { return }
+        let folder = chosen.deletingPathExtension()
+        let showURL = folder.appendingPathComponent(chosen.lastPathComponent)
+        busyMessage = "Copying audio…"
+        let session = self.session
+        Task.detached(priority: .userInitiated) {
+            var failure: String?
+            do {
+                try session.saveWithAudio(to: showURL)
+            } catch {
+                failure = error.localizedDescription
+            }
+            let message = failure
+            await MainActor.run {
+                self.busyMessage = nil
+                if let message {
+                    self.alert = AlertMessage(title: "Could not save with audio", message: message)
+                } else {
+                    UserDefaults.standard.set(showURL.path, forKey: Self.lastShowKey)
+                    self.lastSave = Date()
+                    self.clearUndo()
+                    self.imageCache = [:]
+                    self.missingImages = []
+                    NSWorkspace.shared.activateFileViewerSelecting([showURL])
+                }
+                self.refreshShow()
+            }
+        }
+    }
+
     // MARK: - Live transport
 
     /// Scrubbing in Now Playing.
@@ -431,7 +522,7 @@ final class AppModel: ObservableObject {
 
     func setMultiplay(bank: Int, _ on: Bool) {
         report { try session.setBankMultiplay(bank, on) }
-        refreshShow()
+        refreshShow(undo: "Multiplay")
     }
 
     // MARK: - Rundown
@@ -456,7 +547,7 @@ final class AppModel: ObservableObject {
 
     func setRundown(_ items: [RundownItem]) {
         report { try session.setRundown(items) }
-        refreshShow()
+        refreshShow(undo: "Rundown Change")
     }
 
     private var nextRundownID: UInt64 {
@@ -570,7 +661,7 @@ final class AppModel: ObservableObject {
 
     func clearMIDI(_ target: String) {
         report { try session.clearMIDI(target: target) }
-        refreshShow()
+        refreshShow(undo: "Clear MIDI")
     }
 
     var learningTarget: String? { status?.learning }
@@ -582,7 +673,7 @@ final class AppModel: ObservableObject {
 
     func applyOutputs(_ outputs: [OutputDoc]) {
         report { try session.setOutputs(outputs) }
-        refreshShow()
+        refreshShow(undo: "Audio Outputs")
     }
 
     // MARK: - Cues
@@ -624,7 +715,7 @@ final class AppModel: ObservableObject {
         if cue.hotkey == nil {
             cue.hotkey = freeHotkey(preferring: slot)
         }
-        updateCue(cue)
+        updateCue(cue, undo: "Make Playlist")
     }
 
     // MARK: - Play log
@@ -721,7 +812,7 @@ final class AppModel: ObservableObject {
 
     func setPreviewOutput(_ output: Int?) {
         report { try session.setPreviewOutput(output) }
-        refreshShow()
+        refreshShow(undo: "Preview Output")
     }
 
     /// Pads playing now, soonest to end first (countdown-less ones last).
@@ -751,7 +842,7 @@ final class AppModel: ObservableObject {
             cue.hotkey = freeHotkey(preferring: slot)
         }
         let trim = isNew ? (show.padDefaults?.trimSilence ?? true) : true
-        updateCue(cue, trimLeadingSilence: trim)
+        updateCue(cue, trimLeadingSilence: trim, undo: "Assign Sound")
     }
 
     /// An empty pad with the show's defaults for new pads.
@@ -770,7 +861,7 @@ final class AppModel: ObservableObject {
     func pasteStyle(to slot: Int) {
         guard let style = copiedStyle, var cue = show.cue(at: slot) else { return }
         style.apply(to: &cue, outputs: show.outputs.count)
-        updateCue(cue)
+        updateCue(cue, undo: "Paste Style")
     }
 
     /// New pads get this pad's colour, fades, loop, group, output and
@@ -791,7 +882,7 @@ final class AppModel: ObservableObject {
 
     func setPadDefaults(_ defaults: PadDefaults?) {
         report { try session.setPadDefaults(defaults) }
-        refreshShow()
+        refreshShow(undo: "New Pad Defaults")
     }
 
     func choosePicture(for slot: Int) {
@@ -809,7 +900,7 @@ final class AppModel: ObservableObject {
     func setImage(_ url: URL?, for slot: Int) {
         guard var cue = show.cue(at: slot) else { return }
         cue.image = url.map(storedImagePath(for:))
-        updateCue(cue)
+        updateCue(cue, undo: url == nil ? "Remove Picture" : "Picture")
     }
 
     /// Where a chosen picture is kept: copied beside a saved show.
@@ -877,7 +968,7 @@ final class AppModel: ObservableObject {
         guard !files.isEmpty else { return }
         report { try session.addToLibrary(files.sorted()) }
         showingLibrary = true
-        refreshShow()
+        refreshShow(undo: "Add to Library")
     }
 
     func importToLibrary() {
@@ -894,7 +985,7 @@ final class AppModel: ObservableObject {
 
     func removeFromLibrary(_ file: String) {
         report { try session.removeFromLibrary(file) }
-        refreshShow()
+        refreshShow(undo: "Remove from Library")
     }
 
     /// The file on disk (it may have moved with the show).
@@ -955,7 +1046,7 @@ final class AppModel: ObservableObject {
     /// Applies a cue in the background (it may need to decode audio).
     /// `trimLeadingSilence` (for a newly dropped file) starts the first
     /// clip where the sound starts, so the pad fires instantly.
-    func updateCue(_ cue: CueDoc, trimLeadingSilence: Bool = false) {
+    func updateCue(_ cue: CueDoc, trimLeadingSilence: Bool = false, undo label: String = "Edit Pad") {
         busySlots.insert(cue.slot)
         let session = self.session
         let minimumTrim = Self.minimumTrimSeconds
@@ -989,26 +1080,26 @@ final class AppModel: ObservableObject {
                 if let message {
                     self.alert = AlertMessage(title: "Could not update pad", message: message)
                 }
-                self.refreshShow()
+                self.refreshShow(undo: label)
             }
         }
     }
 
     func clear(_ slot: Int) {
         report { try session.removeCue(slot: slot) }
-        refreshShow()
+        refreshShow(undo: "Clear Pad")
     }
 
     func move(from: Int, to: Int) {
         guard from != to else { return }
         report { try session.moveCue(from: from, to: to) }
-        refreshShow()
+        refreshShow(undo: "Move Pad")
     }
 
     func setLoop(_ slot: Int, _ looping: Bool) {
         guard var cue = show.cue(at: slot) else { return }
         cue.loop = looping
-        updateCue(cue)
+        updateCue(cue, undo: "Loop")
     }
 
     func stop(_ slot: Int, fade: Bool) {

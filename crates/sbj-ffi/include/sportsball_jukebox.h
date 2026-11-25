@@ -106,7 +106,7 @@ char *sbj_session_show_json(const SbjSession *session);
 /* {"game", "preview_output": number|null,
  *  "preview": {"slot" (4294967295 for a library file), "file": string|null,
  *  "playing","position","duration"}|null,
- *  "bank", "standby": index|null, "last": slot|null (most recently
+ *  "bank", "standby": index|null, "undo": label|null, "redo": label|null, "last": slot|null (most recently
  *  fired pad still playing), "single_play": [bank],
  *  "learning": "cue:N|stop_all|next_bank|prev_bank|rundown_go|fade_last"|null,
  *  "last_control": string|null, "midi_inputs": [string]|null (null = MIDI off),
@@ -122,6 +122,19 @@ SbjStatus sbj_session_new_show(const SbjSession *session);
 SbjStatus sbj_session_open_show(const SbjSession *session, const char *path);
 /* path NULL = the show's current file. Writes atomically. */
 SbjStatus sbj_session_save_show(const SbjSession *session, const char *path);
+/* SLOW: save to path with copies of every file the show uses in Audio/ and
+ * Images/ beside it, pointing the show at them (relative paths), so the
+ * folder is self-contained. Pads keep firing while it copies. Missing
+ * files are skipped and reported as a notice. */
+SbjStatus sbj_session_save_with_audio(const SbjSession *session, const char *path);
+
+/* Undo: the app marks each user action as a step (label e.g. "Paste
+ * Style"); returns true if the show changed since the last mark. Undo and
+ * redo reload only the pads that changed. Status JSON "undo"/"redo" name
+ * the steps (null if none). Opening or creating a show clears them. */
+bool sbj_session_record_undo(const SbjSession *session, const char *label);
+SbjStatus sbj_session_undo(const SbjSession *session);
+SbjStatus sbj_session_redo(const SbjSession *session);
 /* {"name", "slots" (pads per bank), "columns", "banks": [names],
  *  "stop_all_fade"?: seconds, "level_match"?: LUFS|null (null = off;
  *  absent = unchanged; changing it reloads, and so stops, every pad)}.

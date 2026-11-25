@@ -23,6 +23,10 @@
    you clicked Don't Allow, change it in **System Settings → Privacy &
    Security → Local Network**.
 
+To move a show to another Mac or a USB stick, use **File → Save With
+Audio…**: it makes one folder with the show and copies of all its audio
+and pictures, which opens anywhere.
+
 Steps 3 and 4 are needed once per new version. Shows, settings and the
 game log are kept when you update.
 

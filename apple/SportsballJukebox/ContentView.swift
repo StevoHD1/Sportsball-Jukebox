@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject private var model: AppModel
+    @Environment(\.undoManager) private var undoManager
 
     var body: some View {
         VStack(spacing: 0) {
@@ -46,8 +47,14 @@ struct ContentView: View {
                 .padding(.trailing, 16)
                 .padding(.bottom, 40)
         }
+        .onAppear { model.undoManager = undoManager }
+        .onChange(of: undoManager) { _, manager in model.undoManager = manager }
         .overlay {
-            if model.isLoadingShow {
+            if let message = model.busyMessage {
+                ProgressView(message)
+                    .padding(24)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+            } else if model.isLoadingShow {
                 ProgressView("Loading show…")
                     .padding(24)
                     .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))

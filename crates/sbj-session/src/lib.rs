@@ -29,6 +29,7 @@ use sbj_engine::{
 };
 use sbj_media::MediaError;
 
+mod collect;
 pub mod control;
 mod library;
 pub mod log;
@@ -38,6 +39,8 @@ mod preview;
 mod remote;
 mod rundown;
 mod transport;
+mod undo;
+pub use collect::CollectPlan;
 pub use library::LibraryEntry;
 pub use remote::RemoteError;
 
@@ -354,6 +357,7 @@ pub struct Session<B: AudioBackend> {
     recent_fires: HashMap<u32, Instant>,
     /// Pads in the order they last started (for Fade Last / Stop Last).
     fire_order: Vec<u32>,
+    history: undo::UndoHistory,
     playlists: HashMap<u32, playlist::PlaylistState>,
     /// The pad being previewed, and on which output.
     previewing: Option<(u32, usize)>,
@@ -390,6 +394,7 @@ impl<B: AudioBackend> Session<B> {
             duck_applied: HashMap::new(),
             recent_fires: HashMap::new(),
             fire_order: Vec::new(),
+            history: undo::UndoHistory::default(),
             playlists: HashMap::new(),
             previewing: None,
             previewing_file: None,
@@ -446,6 +451,7 @@ impl<B: AudioBackend> Session<B> {
         self.standby = self.pad_step_from(0);
         self.learning = None;
         self.dirty = false;
+        self.reset_undo();
         self.outputs = (0..self.show.outputs.len())
             .map(|_| OutputRuntime::default())
             .collect();
