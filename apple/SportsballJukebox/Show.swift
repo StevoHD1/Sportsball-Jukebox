@@ -261,8 +261,6 @@ struct PadDefaults: Codable, Equatable {
         duck = try c.decodeIfPresent(Float.self, forKey: .duck)
         trimSilence = try c.value(.trimSilence, or: true)
         levelMatch = try c.value(.levelMatch, or: true)
-        playMode = try c.value(.playMode, or: .bank)
-        onFire = try c.value(.onFire, or: [])
     }
 
     /// Applies these settings to a new pad.
@@ -436,6 +434,8 @@ struct CueDoc: Codable, Equatable {
         playlist = try c.decodeIfPresent(PlaylistDoc.self, forKey: .playlist)
         sponsor = try c.decodeIfPresent(String.self, forKey: .sponsor)
         levelMatch = try c.value(.levelMatch, or: true)
+        playMode = try c.value(.playMode, or: .bank)
+        onFire = try c.value(.onFire, or: [])
     }
 
     /// A playlist pad of the given files.
