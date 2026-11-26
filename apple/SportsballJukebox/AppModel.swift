@@ -223,10 +223,14 @@ final class AppModel: ObservableObject {
         current.notices = []
         // A finished MIDI learn changed the show on the engine side.
         let finishedLearning = status?.learning != nil && current.learning == nil
+        // So did files arriving in a watch folder.
+        let imported = status.map { $0.watchImports != current.watchImports } ?? false
         if current != status {
             status = current
         }
-        if finishedLearning {
+        if imported {
+            refreshShow(undo: "Import from Watch Folder")
+        } else if finishedLearning {
             refreshShow()
         }
     }
@@ -1092,6 +1096,38 @@ final class AppModel: ObservableObject {
         if panel.runModal() == .OK {
             addToLibrary(urls: panel.urls)
         }
+    }
+
+    // MARK: Watch folders
+
+    @Published var showingWatchFolders = false
+
+    func setWatchFolders(_ folders: [WatchFolder]) {
+        report { try session.setWatchFolders(folders) }
+        refreshShow(undo: "Watch Folders")
+    }
+
+    /// Asks for folders to watch.
+    func addWatchFolder() {
+        let panel = NSOpenPanel()
+        panel.title = "Watch Folder"
+        panel.message = "New audio files in these folders will be added to the library."
+        panel.prompt = "Watch"
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = true
+        guard panel.runModal() == .OK else { return }
+        var folders = show.watchFolders
+        for url in panel.urls where !folders.contains(where: { $0.path == url.path }) {
+            folders.append(WatchFolder(path: url.path))
+        }
+        setWatchFolders(folders)
+        showingLibrary = true
+    }
+
+    func isWatchFolderMissing(_ path: String) -> Bool {
+        status?.missingWatchFolders.contains(path) ?? false
     }
 
     func removeFromLibrary(_ file: String) {

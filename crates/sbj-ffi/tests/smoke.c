@@ -94,6 +94,14 @@ int main(void) {
     CHECK(library != NULL && strstr(library, "elsewhere.wav") != NULL);
     sbj_string_free(library);
     CHECK(sbj_session_remove_from_library(s, "elsewhere.wav") == SBJ_STATUS_OK);
+    CHECK(sbj_session_set_watch_folders_json(s, "[{\"path\":\"/nonexistent/clips\"}]")
+          == SBJ_STATUS_OK);
+    CHECK(sbj_session_set_watch_folders_json(s, "nope") == SBJ_STATUS_INVALID_ARGUMENT);
+    CHECK(sbj_session_set_watch_folders_json(NULL, "[]") != SBJ_STATUS_OK);
+    char *watch_show = sbj_session_show_json(s);
+    CHECK(watch_show != NULL && strstr(watch_show, "/nonexistent/clips") != NULL);
+    sbj_string_free(watch_show);
+    CHECK(sbj_session_set_watch_folders_json(s, "[]") == SBJ_STATUS_OK);
     char *where = sbj_session_resolve_file(s, wav);
     CHECK(where != NULL);
     sbj_string_free(where);

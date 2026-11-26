@@ -44,9 +44,11 @@ mod rundown;
 mod transport;
 pub use diagnostics::EventEntry;
 mod undo;
+mod watch;
 pub use collect::CollectPlan;
 pub use library::LibraryEntry;
 pub use remote::RemoteError;
+pub use watch::{AUDIO_EXTENSIONS, WatchFolder};
 
 pub use log::{LogEntry, LogTotal};
 
@@ -353,6 +355,9 @@ pub struct Session<B: AudioBackend> {
     notices: Vec<String>,
     master_gain: f32,
     retry_interval: Duration,
+    /// Watch folder scanning (see `watch`).
+    watch: watch::WatchState,
+    watch_interval: Duration,
     /// Override for the engine's declick length (tests use 0).
     declick_seconds: Option<f64>,
     current_bank: u32,
@@ -406,6 +411,8 @@ impl<B: AudioBackend> Session<B> {
             notices: Vec::new(),
             master_gain: 1.0,
             retry_interval: DEFAULT_RETRY_INTERVAL,
+            watch: watch::WatchState::default(),
+            watch_interval: watch::DEFAULT_WATCH_INTERVAL,
             declick_seconds: None,
             current_bank: 0,
             standby: None,
@@ -477,6 +484,7 @@ impl<B: AudioBackend> Session<B> {
         self.learning = None;
         self.dirty = false;
         self.played.clear();
+        self.reset_watch();
         self.reset_undo();
         self.outputs = (0..self.show.outputs.len())
             .map(|_| OutputRuntime::default())
@@ -1385,6 +1393,7 @@ impl<B: AudioBackend> Session<B> {
         }
         self.handle_marker_events(&reached);
         self.check_glitches();
+        self.scan_watch_folders();
         self.run_scheduled_fires();
         self.log.source = "auto";
         self.advance_playlists();

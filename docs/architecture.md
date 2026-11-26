@@ -447,6 +447,21 @@ the pre-game check warns about steps on empty pads.
   and drags files onto pads or into a pad's timeline (the pad editor has
   its own copy of the library, as the main window can't be reached while
   the editor sheet is open).
+- **Watch folders** (`sbj-session/src/watch.rs`): the show's
+  `watch_folders` (`[{path, subfolders}]`) are scanned from `poll` every
+  2 s, on the control thread. A new audio file joins the library once
+  it has finished copying: the same size and modification time on two
+  scans, or last modified 3+ s ago. Files are skipped if the library
+  already has them, by resolved path or by name and size (so files
+  copied into `Audio/` by Save With Audio don't come back as
+  duplicates). Hidden files, links and empty files are ignored, and
+  subfolders go 8 deep at most. Each file is offered once per show
+  opening, so removing one from the library sticks until the show is
+  reopened. Imports bump the status JSON's `watch_imports`, which makes
+  the app reload the library and record one "Import from Watch Folder"
+  undo step. Each import also posts a notice and an Event Log entry
+  (kind `library`). A folder that can't be read is logged once, listed
+  in `missing_watch_folders`, and flagged by the pre-game check.
 - **Pad looks:** `color` is a preset name or `#RRGGBB` (the remote page
   understands both); `image` is a picture shown on the pad, copied into
   an `Images` folder beside a saved show and found there if the show

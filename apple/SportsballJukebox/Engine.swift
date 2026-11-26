@@ -231,6 +231,12 @@ final class EngineSession: @unchecked Sendable {
         _ = sbj_session_reset_played(handle, Int32(clamping: bank ?? -1))
     }
 
+    // MARK: Watch folders
+
+    func setWatchFolders(_ folders: [WatchFolder]) throws {
+        try Engine.check(sbj_session_set_watch_folders_json(handle, try ShowDoc.encode(folders)))
+    }
+
     // MARK: Diagnostics
 
     func events() -> [EventEntry] {

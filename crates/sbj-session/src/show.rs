@@ -136,6 +136,9 @@ pub struct Show {
     /// With a played colour set, mark pads as played when they fire.
     #[serde(default = "yes", skip_serializing_if = "is_true")]
     pub mark_played: bool,
+    /// Folders whose new audio files are added to the library.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub watch_folders: Vec<crate::WatchFolder>,
 }
 
 /// A named pad colour kept with the show.
@@ -306,6 +309,7 @@ impl Default for Show {
             single_play: Vec::new(),
             colors: Vec::new(),
             played_color: None,
+            watch_folders: Vec::new(),
             mark_played: true,
         }
     }

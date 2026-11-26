@@ -25,7 +25,8 @@ support for several audio interfaces at once.
   automatic trimming of silence at the start of dropped files;
 - a game rundown fired step by step with GO (Space, MIDI, OSC or the
   phone remote);
-- an audio library to build pads from, custom pad colours and pictures,
+- an audio library to build pads from (with watch folders that add new
+  clips automatically), custom pad colours and pictures,
   copy/paste of pad styles, and defaults for new pads;
 - pad actions: play over / solo per pad, and actions when a pad fires
   (stop others, fire or stop a pad, duck everything else, switch bank);

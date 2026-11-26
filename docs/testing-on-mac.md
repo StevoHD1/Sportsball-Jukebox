@@ -244,6 +244,14 @@ built-in speakers or headphones)
 - [ ] Show → Show Library (⌥⌘L): add a folder of audio with +. Search
       for a file; click the headphones to preview it (needs a preview
       output); drag it onto an empty pad.
+- [ ] Library → 👁 (or Show → Watch Folders…) → Add Folder…: pick a
+      folder. Copy a few audio files into it in the Finder (include a big
+      one and one in a subfolder): within a few seconds they appear in
+      the library with a notice, and Edit → Undo removes them. Turn off
+      "Include subfolders" and add a file to a subfolder: it isn't added.
+      Rename the folder: the 👁 turns into a warning and the pre-game
+      check mentions it; rename it back and it's watched again. Save,
+      close and reopen the show: the folder is still watched.
 - [ ] Open a pad's editor, click Library in its toolbar, and drag two
       files onto the timeline: they become clips where you dropped them.
 - [ ] In a pad's editor, pick a custom colour with the colour well, and
