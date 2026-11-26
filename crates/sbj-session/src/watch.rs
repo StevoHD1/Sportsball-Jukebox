@@ -5,9 +5,9 @@
 //! added once it has finished copying (its size and modification time
 //! are the same on two scans, or it was last modified a few seconds
 //! ago). Files already in the library (the same path, or the same name
-//! and size, as after Save With Audio) are skipped, and each file is only
-//! offered once per show opening, so removing one from the library
-//! sticks until the show is reopened.
+//! and size, as after Save With Audio) are skipped. Files stay where they
+//! are, and the folder is the source of truth: a file removed from the
+//! library comes back on the next scan while it's still in the folder.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -144,6 +144,15 @@ impl<B: AudioBackend> Session<B> {
     /// reloads the library when this changes).
     pub fn watch_imports(&self) -> u64 {
         self.watch.imports
+    }
+
+    /// A file left the library: offer it again if it's still watched.
+    pub(crate) fn forget_watched(&mut self, file: &str) {
+        let path = PathBuf::from(file);
+        let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
+        self.watch
+            .seen
+            .retain(|p| p != &path && p.canonicalize().map_or(true, |c| c != canonical));
     }
 
     /// For tests: scan more often.

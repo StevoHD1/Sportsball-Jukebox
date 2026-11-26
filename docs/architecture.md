@@ -455,9 +455,9 @@ the pre-game check warns about steps on empty pads.
   already has them, by resolved path or by name and size (so files
   copied into `Audio/` by Save With Audio don't come back as
   duplicates). Hidden files, links and empty files are ignored, and
-  subfolders go 8 deep at most. Each file is offered once per show
-  opening, so removing one from the library sticks until the show is
-  reopened. Imports bump the status JSON's `watch_imports`, which makes
+  subfolders go 8 deep at most. Files are never moved or copied: the
+  folder is the source of truth, so a file removed from the library
+  comes back on the next scan while it's still in the folder. Imports bump the status JSON's `watch_imports`, which makes
   the app reload the library and record one "Import from Watch Folder"
   undo step. Each import also posts a notice and an Event Log entry
   (kind `library`). A folder that can't be read is logged once, listed

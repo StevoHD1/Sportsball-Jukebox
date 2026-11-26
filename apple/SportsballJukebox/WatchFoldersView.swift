@@ -32,7 +32,7 @@ struct WatchFoldersView: View {
                 }
                 Spacer()
             }
-            Text("To keep a file out of the library for good, move it out of the folder; files removed from the library come back when the show is next opened.")
+            Text("Files stay where they are. Manage them in the Finder: a file removed from the library comes back while it's still in a watched folder.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

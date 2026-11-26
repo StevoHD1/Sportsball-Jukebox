@@ -102,7 +102,7 @@ fn subfolders_can_be_left_out() {
 }
 
 #[test]
-fn removed_and_duplicate_files_are_not_added_again() {
+fn duplicates_are_skipped_and_removed_files_come_back() {
     let dir = temp("dupes");
     let elsewhere = temp("dupes-elsewhere");
     // Already in the library from another folder (as after Save With Audio).
@@ -116,7 +116,17 @@ fn removed_and_duplicate_files_are_not_added_again() {
     assert_eq!(library(&s), ["Drop.wav", "Same.wav"]);
     assert_eq!(s.library_entries().len(), 2);
 
+    // The folder is the source of truth: a file removed from the library
+    // while it's still in the folder comes back.
     let drop = dir.join("Drop.wav").display().to_string();
+    s.remove_from_library(&drop).unwrap();
+    assert_eq!(library(&s), ["Same.wav"]);
+    s.poll();
+    s.poll();
+    assert_eq!(library(&s), ["Drop.wav", "Same.wav"]);
+
+    // Deleted in the Finder and removed from the library: gone for good.
+    std::fs::remove_file(dir.join("Drop.wav")).unwrap();
     s.remove_from_library(&drop).unwrap();
     s.poll();
     s.poll();
