@@ -161,7 +161,8 @@ struct PreviewPlayer: View {
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
-        if let preview = model.status?.preview {
+        // Library files have their own player in the library.
+        if let preview = model.status?.preview, !(preview.file != nil && model.showingLibrary) {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 8) {
                     Image(systemName: "headphones")

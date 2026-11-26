@@ -36,6 +36,10 @@ struct WatchFoldersView: View {
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+            Text("Box Drive: right-click the folder in the Finder → Make Available Offline to keep everything in it on this Mac for good. Only Box can change that setting.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .padding(14)
         .frame(width: 380)
@@ -58,9 +62,13 @@ private struct WatchFolderRow: View {
                     .foregroundStyle(missing ? Color.orange : Color.secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
-                Toggle("Include subfolders", isOn: subfolders)
+                Toggle("Include subfolders", isOn: setting(\.subfolders))
                     .font(.caption)
                     .controlSize(.small)
+                Toggle("Download online-only files (Box Drive, iCloud)", isOn: setting(\.download))
+                    .font(.caption)
+                    .controlSize(.small)
+                    .help("Files that are only in the cloud are downloaded to this Mac in the background")
             }
             Spacer(minLength: 0)
             Button {
@@ -84,13 +92,13 @@ private struct WatchFolderRow: View {
 
     private var missing: Bool { model.isWatchFolderMissing(folder.path) }
 
-    private var subfolders: Binding<Bool> {
+    private func setting(_ key: WritableKeyPath<WatchFolder, Bool>) -> Binding<Bool> {
         Binding(
-            get: { folder.subfolders },
+            get: { folder[keyPath: key] },
             set: { value in
                 let folders = model.show.watchFolders.map { f -> WatchFolder in
                     var f = f
-                    if f.path == folder.path { f.subfolders = value }
+                    if f.path == folder.path { f[keyPath: key] = value }
                     return f
                 }
                 model.setWatchFolders(folders)

@@ -231,6 +231,46 @@ final class EngineSession: @unchecked Sendable {
         _ = sbj_session_reset_played(handle, Int32(clamping: bank ?? -1))
     }
 
+    // MARK: Bank defaults
+
+    /// nil = the bank uses the show's settings for new pads.
+    func setBankDefaults(bank: Int, _ defaults: PadDefaults?) throws {
+        if let defaults {
+            try Engine.check(
+                sbj_session_set_bank_defaults_json(handle, UInt32(clamping: bank), try ShowDoc.encode(defaults))
+            )
+        } else {
+            try Engine.check(sbj_session_set_bank_defaults_json(handle, UInt32(clamping: bank), nil))
+        }
+    }
+
+    /// Gives existing pads their bank's settings for new pads (nil = every
+    /// bank). Returns how many changed.
+    func applyPadDefaults(bank: Int?) throws -> Int {
+        var changed: UInt32 = 0
+        try Engine.check(sbj_session_apply_pad_defaults(handle, Int32(clamping: bank ?? -1), &changed))
+        return Int(changed)
+    }
+
+    // MARK: Library player
+
+    func pausePreview() throws {
+        try Engine.check(sbj_session_pause_preview(handle))
+    }
+
+    func resumePreview() throws {
+        try Engine.check(sbj_session_resume_preview(handle))
+    }
+
+    /// nil = the preview output.
+    func setLibraryOutput(_ output: Int?) throws {
+        try Engine.check(sbj_session_set_library_output(handle, Int32(clamping: output ?? -1)))
+    }
+
+    func downloadFile(_ file: String) throws {
+        try Engine.check(sbj_session_download_file(handle, file))
+    }
+
     // MARK: Watch folders
 
     func setWatchFolders(_ folders: [WatchFolder]) throws {

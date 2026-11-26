@@ -252,6 +252,24 @@ built-in speakers or headphones)
       Rename the folder: the 👁 turns into a warning and the pre-game
       check mentions it; rename it back and it's watched again. Save,
       close and reopen the show: the folder is still watched.
+- [ ] Select 5 audio files in the Finder and drop them on an empty pad:
+      5 pads appear from that pad onwards, titled from the file names.
+      Drop a folder between pads: a pad per file. Drop more files than
+      the bank has room for: it asks to add banks or skip the rest. Undo
+      removes each drop in one go. ⌥-drop several files on a pad: one
+      playlist pad.
+- [ ] Library: select a file, then ▶ / ⏸ / ■ in the player at the bottom
+      (Space works too), scrub, and pick where it plays (preview output
+      by default, or Main). Select several files (⌘-click) → Add to Bank,
+      or press Return: pads appear on the bank shown.
+- [ ] Bank tab → right-click → Bank Settings… (or the ⚙︎ on the bank
+      bar): give the bank its own colour for new pads, tick "Also apply
+      to this bank's existing pads", Apply: only that bank's pads change.
+      Show Settings → New pads → "Also apply to every existing pad".
+- [ ] Box Drive: watch a Box folder with online-only files (☁︎ in the
+      Finder). They're added to the library and downloaded within a few
+      seconds (the Event Log shows "Downloaded …"). A library file that's
+      still online-only shows a cloud button; clicking it downloads it.
 - [ ] Open a pad's editor, click Library in its toolbar, and drag two
       files onto the timeline: they become clips where you dropped them.
 - [ ] In a pad's editor, pick a custom colour with the colour well, and

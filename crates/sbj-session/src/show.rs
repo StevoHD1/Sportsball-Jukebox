@@ -139,6 +139,21 @@ pub struct Show {
     /// Folders whose new audio files are added to the library.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub watch_folders: Vec<crate::WatchFolder>,
+    /// Pages (banks) with their own settings for new pads, overriding
+    /// `pad_defaults`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bank_defaults: Vec<BankDefaults>,
+    /// Where the library's player plays; `None` = the preview output.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub library_output: Option<u32>,
+}
+
+/// One page's own settings for new pads.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BankDefaults {
+    /// 0-based.
+    pub bank: u32,
+    pub defaults: PadDefaults,
 }
 
 /// A named pad colour kept with the show.
@@ -180,6 +195,29 @@ pub struct PadDefaults {
     pub trim_silence: bool,
     #[serde(default = "yes", skip_serializing_if = "is_true")]
     pub level_match: bool,
+}
+
+impl PadDefaults {
+    /// Gives an existing pad these settings (colour, fades, loop, group,
+    /// output if it exists, ducking, level matching). Returns whether
+    /// anything changed. Leading-silence trimming only applies to new
+    /// pads.
+    pub fn apply_to(&self, cue: &mut CueDoc, outputs: usize) -> bool {
+        let before = cue.clone();
+        cue.color.clone_from(&self.color);
+        cue.fade_in = self.fade_in;
+        cue.fade_out = self.fade_out;
+        cue.looping = self.looping;
+        cue.group.clone_from(&self.group);
+        cue.output = if (self.output as usize) < outputs {
+            self.output
+        } else {
+            0
+        };
+        cue.duck = self.duck;
+        cue.level_match = self.level_match;
+        *cue != before
+    }
 }
 
 impl Default for PadDefaults {
@@ -310,6 +348,8 @@ impl Default for Show {
             colors: Vec::new(),
             played_color: None,
             watch_folders: Vec::new(),
+            bank_defaults: Vec::new(),
+            library_output: None,
             mark_played: true,
         }
     }

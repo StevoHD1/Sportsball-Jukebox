@@ -105,9 +105,9 @@ char *sbj_session_show_json(const SbjSession *session);
 
 /* {"game", "preview_output": number|null,
  *  "preview": {"slot" (4294967295 for a library file), "file": string|null,
- *  "playing","position","duration"}|null,
+ *  "playing","paused","position","duration"}|null,
  *  "bank", "standby": index|null, "played": [slot],
- *  "watch_imports": number, "missing_watch_folders": [path], "undo": label|null, "redo": label|null, "last": slot|null (most recently
+ *  "watch_imports": number, "downloads": number, "missing_watch_folders": [path], "undo": label|null, "redo": label|null, "last": slot|null (most recently
  *  fired pad still playing), "single_play": [bank],
  *  "learning": "cue:N|stop_all|next_bank|prev_bank|rundown_go|fade_last"|null,
  *  "last_control": string|null, "midi_inputs": [string]|null (null = MIDI off),
@@ -183,9 +183,20 @@ SbjStatus sbj_session_set_show_colors_json(const SbjSession *session, const char
  * (the show file's "pad_defaults"); NULL or "null" = built-in. The app
  * applies them when it creates a pad. */
 SbjStatus sbj_session_set_pad_defaults_json(const SbjSession *session, const char *json);
+/* A page's own settings for new pads (show JSON "bank_defaults":
+ * [{"bank", "defaults"}]); NULL or "null" = use the show's. */
+SbjStatus sbj_session_set_bank_defaults_json(const SbjSession *session, uint32_t bank,
+                                             const char *json);
+/* Give existing pads their page's settings for new pads (colour, fades,
+ * loop, group, output, duck, level match); bank < 0 = every page.
+ * `changed` (may be NULL) receives how many pads changed. */
+SbjStatus sbj_session_apply_pad_defaults(const SbjSession *session, int32_t bank,
+                                         uint32_t *changed);
 
 /* [{"file", "used_by": [slot], "loaded", "duration": s|null,
- *   "loudness": LUFS|null, "error": string|null}]. Library = files kept
+ *   "loudness": LUFS|null, "error": string|null,
+ *   "online_only": bool (cloud placeholder, not on this Mac yet),
+ *   "downloading": bool}]. Library = files kept
  * with the show ("library") plus every file a pad uses. Free with
  * sbj_string_free. */
 char *sbj_session_library_json(const SbjSession *session);
@@ -195,7 +206,8 @@ SbjStatus sbj_session_add_to_library_json(const SbjSession *session, const char 
 SbjStatus sbj_session_remove_from_library(const SbjSession *session, const char *file);
 /* Watch folders (saved with the show; show JSON "watch_folders"): new
  * audio files in them join the library once they've finished copying.
- * [{"path": string, "subfolders"?: bool (default true)}]. Status JSON
+ * [{"path": string, "subfolders"?: bool, "download"?: bool (both default
+ * true; download = fetch online-only cloud files)}]. Status JSON
  * "watch_imports" counts imports (reload the library when it changes);
  * "missing_watch_folders": [path] can't be read. */
 SbjStatus sbj_session_set_watch_folders_json(const SbjSession *session, const char *json);
@@ -291,6 +303,16 @@ SbjStatus sbj_session_preview_cue(const SbjSession *session, uint32_t slot);
 /* Move the preview's playhead (playing it again if it had stopped). */
 SbjStatus sbj_session_seek_preview(const SbjSession *session, double seconds);
 SbjStatus sbj_session_stop_preview(const SbjSession *session);
+/* The library's player: pause / carry on. */
+SbjStatus sbj_session_pause_preview(const SbjSession *session);
+SbjStatus sbj_session_resume_preview(const SbjSession *session);
+/* Where library files play (show JSON "library_output"); negative = the
+ * preview output. */
+SbjStatus sbj_session_set_library_output(const SbjSession *session, int32_t output);
+/* Download a library file that's only in the cloud (Box Drive, iCloud)
+ * in the background; status JSON "downloads" changes as downloads start
+ * and finish. */
+SbjStatus sbj_session_download_file(const SbjSession *session, const char *file);
 /* Output index used for previews; negative = preview off. */
 SbjStatus sbj_session_set_preview_output(const SbjSession *session, int32_t output);
 /* Playlist pad: crossfade to the next song (or start it). */

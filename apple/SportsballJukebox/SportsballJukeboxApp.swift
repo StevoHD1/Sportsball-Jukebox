@@ -31,6 +31,7 @@ struct SportsballJukeboxApp: App {
                 Button("Control (MIDI, OSC, Remote)…") { model.showingControls = true }
                     .keyboardShortcut("m", modifiers: [.command, .shift])
                 Button("Show Settings…") { model.showingSettings = true }
+                Button("Bank Settings…") { model.showingBankSettings = true }
                 Button("Colour Presets…") { model.showingColours = true }
                 Button("Watch Folders…") {
                     model.showingLibrary = true

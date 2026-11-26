@@ -25,6 +25,7 @@ fn watching(dir: &Path, subfolders: bool) -> (OfflineBackend, Session<OfflineBac
     s.set_watch_folders(vec![WatchFolder {
         path: dir.display().to_string(),
         subfolders,
+        download: true,
     }]);
     (backend, s)
 }
@@ -166,14 +167,17 @@ fn watch_folders_are_saved_with_the_show() {
         WatchFolder {
             path: "/tmp/clips/".into(),
             subfolders: false,
+            download: true,
         },
         WatchFolder {
             path: "/tmp/clips".into(),
             subfolders: true,
+            download: true,
         },
         WatchFolder {
             path: "  ".into(),
             subfolders: true,
+            download: true,
         },
     ]);
     assert_eq!(s.watch_folders().len(), 1);
@@ -200,4 +204,77 @@ fn the_pregame_check_warns_about_missing_watch_folders() {
             .any(|c| c.message.contains("/nonexistent/sbj/clips")),
         "{checks:?}"
     );
+}
+
+fn cloud_placeholder(path: &Path) -> bool {
+    path.file_name()
+        .is_some_and(|n| n.to_string_lossy().starts_with("cloud-"))
+}
+
+#[test]
+fn online_only_files_are_downloaded_in_the_background() {
+    let dir = temp("cloud");
+    let (_b, mut s) = watching(&dir, true);
+    s.set_online_only_probe(cloud_placeholder);
+    write_wav(&dir.join("cloud-Horn.wav"), 48_000, 100, 1000);
+    write_wav(&dir.join("Local.wav"), 48_000, 100, 1000);
+    let before = s.download_changes();
+    s.poll();
+    assert!(s.download_changes() > before, "a download started");
+    let file = dir.join("cloud-Horn.wav").display().to_string();
+    // Wait for the background read to finish.
+    for _ in 0..200 {
+        s.poll();
+        if s.events()
+            .iter()
+            .any(|e| e.message.starts_with("Downloaded"))
+        {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(!s.is_downloading(&file));
+    let messages: Vec<&str> = s.events().iter().map(|e| e.message.as_str()).collect();
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.contains("Downloaded \"cloud-Horn.wav\"")),
+        "{messages:?}"
+    );
+    assert!(
+        !messages
+            .iter()
+            .any(|m| m.contains("Local.wav") && m.contains("Download"))
+    );
+    let entry = s
+        .library_entries()
+        .into_iter()
+        .find(|e| e.file == file)
+        .unwrap();
+    // The probe here never clears, as Box's flag would.
+    assert!(entry.online_only);
+
+    // By hand, and errors for missing files.
+    s.download_file(&file).unwrap();
+    assert!(s.download_file("/nonexistent/x.wav").is_err());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn downloading_can_be_turned_off_per_folder() {
+    let dir = temp("cloud-off");
+    let (_b, mut s) = watching(&dir, true);
+    s.set_online_only_probe(cloud_placeholder);
+    s.set_watch_folders(vec![WatchFolder {
+        path: dir.display().to_string(),
+        subfolders: true,
+        download: false,
+    }]);
+    write_wav(&dir.join("cloud-Horn.wav"), 48_000, 100, 1000);
+    let before = s.download_changes();
+    s.poll();
+    s.poll();
+    assert_eq!(s.download_changes(), before);
+    assert_eq!(library(&s), ["cloud-Horn.wav"], "still imported");
+    let _ = std::fs::remove_dir_all(&dir);
 }

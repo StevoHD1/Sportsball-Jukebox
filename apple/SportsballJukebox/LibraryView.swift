@@ -13,6 +13,7 @@ struct LibraryView: View {
     @State private var unusedOnly = false
     @FocusState private var searching: Bool
     @State private var isDropTarget = false
+    @State private var selection: Set<String> = []
 
     var body: some View {
         VStack(spacing: 0) {
@@ -82,10 +83,26 @@ struct LibraryView: View {
                 .padding(20)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                List(entries) { entry in
-                    LibraryRow(entry: entry)
+                List(entries, selection: $selection) { entry in
+                    LibraryRow(entry: entry, selection: selection)
                 }
                 .listStyle(.sidebar)
+                .onKeyPress(.return) {
+                    guard !selection.isEmpty else { return .ignored }
+                    model.addLibraryFilesToBank(selectedFiles)
+                    return .handled
+                }
+                .onKeyPress(.space) {
+                    guard let file = playerFile else { return .ignored }
+                    if model.libraryPlaying?.file == file, model.libraryPlaying?.playing == true {
+                        model.pauseLibrary()
+                    } else {
+                        model.playLibraryFile(file)
+                    }
+                    return .handled
+                }
+
+                LibraryTransport(file: playerFile, selected: selectedFiles)
             }
 
             Text(summary)
@@ -112,6 +129,20 @@ struct LibraryView: View {
             model.suspendHotkeys = focused
         }
         .onDisappear { model.suspendHotkeys = false }
+    }
+
+    /// Selected files in list order.
+    private var selectedFiles: [String] {
+        entries.map(\.file).filter { selection.contains($0) }
+    }
+
+    /// The file the transport plays: the one loaded, else the selection.
+    private var playerFile: String? {
+        if let file = model.libraryPlaying?.file,
+           selection.isEmpty || selection.contains(file) {
+            return file
+        }
+        return selectedFiles.count == 1 ? selectedFiles.first : model.libraryPlaying?.file
     }
 
     private var watchMissing: Bool {
@@ -148,6 +179,7 @@ struct LibraryView: View {
 private struct LibraryRow: View {
     @EnvironmentObject private var model: AppModel
     let entry: LibraryEntry
+    var selection: Set<String> = []
 
     var body: some View {
         HStack(spacing: 8) {
@@ -174,6 +206,20 @@ private struct LibraryRow: View {
                     .lineLimit(1)
             }
             Spacer(minLength: 0)
+            if entry.downloading {
+                ProgressView()
+                    .controlSize(.mini)
+                    .help("Downloading from the cloud")
+            } else if entry.onlineOnly {
+                Button {
+                    model.downloadFile(entry.file)
+                } label: {
+                    Image(systemName: "icloud.and.arrow.down")
+                }
+                .buttonStyle(.borderless)
+                .foregroundStyle(.secondary)
+                .help("Only in the cloud (Box Drive, iCloud): click to download it to this Mac")
+            }
             if !entry.usedBy.isEmpty {
                 Text("\(entry.usedBy.count)")
                     .font(.caption2.weight(.semibold))
@@ -191,6 +237,10 @@ private struct LibraryRow: View {
         }
         .contextMenu {
             Button(isPreviewing ? "Stop Preview" : "Preview in Headphones") { model.previewFile(entry.file) }
+            Button(addTitle) { model.addLibraryFilesToBank(addFiles) }
+            if entry.onlineOnly {
+                Button("Download from Cloud") { model.downloadFile(entry.file) }
+            }
             Button("Show in Finder") {
                 NSWorkspace.shared.activateFileViewerSelecting([model.libraryURL(entry.file)])
             }
@@ -200,6 +250,18 @@ private struct LibraryRow: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityHint("Drag onto a pad to use it")
+    }
+
+    /// The right-clicked file, or the whole selection if it's in it.
+    private var addFiles: [String] {
+        selection.contains(entry.file) && selection.count > 1
+            ? model.library.map(\.file).filter { selection.contains($0) }
+            : [entry.file]
+    }
+
+    private var addTitle: String {
+        let count = addFiles.count
+        return count == 1 ? "Add to This Bank" : "Add \(count) Files to This Bank"
     }
 
     private var isPreviewing: Bool {
@@ -222,5 +284,139 @@ private struct LibraryRow: View {
             return title.isEmpty ? "pad \(slot % max(model.show.slots, 1) + 1)" : "\"\(title)\""
         }
         .joined(separator: ", ")
+    }
+}
+
+/// The library's player: play / pause / stop the selected file, scrub,
+/// choose where it plays, and add the selection to the bank shown.
+private struct LibraryTransport: View {
+    @EnvironmentObject private var model: AppModel
+    let file: String?
+    let selected: [String]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Divider()
+            HStack(spacing: 6) {
+                Text(title)
+                    .font(.callout.weight(.medium))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer(minLength: 4)
+                Menu {
+                    Button {
+                        model.setLibraryOutput(nil)
+                    } label: {
+                        if model.show.libraryOutput == nil { Image(systemName: "checkmark") }
+                        Text(previewLabel)
+                    }
+                    Divider()
+                    ForEach(Array(model.show.outputs.enumerated()), id: \.offset) { index, output in
+                        Button {
+                            model.setLibraryOutput(index)
+                        } label: {
+                            if model.show.libraryOutput == index { Image(systemName: "checkmark") }
+                            Text(output.name)
+                        }
+                    }
+                } label: {
+                    Label(model.libraryOutputName, systemImage: model.show.libraryOutput == nil ? "headphones" : "speaker.wave.2")
+                        .font(.caption)
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .help("Where library files play: the preview output (headphones) unless you pick another")
+            }
+
+            ScrubBar(
+                progress: progress,
+                duration: loaded?.duration ?? 0,
+                tint: model.show.libraryOutput == nil ? .blue : .orange
+            ) {
+                model.seekPreview(to: $0)
+            }
+            .disabled(loaded == nil)
+
+            HStack(spacing: 10) {
+                Text(formatTime(loaded?.position ?? 0))
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button {
+                    guard let file else { return }
+                    if isPlaying {
+                        model.pauseLibrary()
+                    } else {
+                        model.playLibraryFile(file)
+                    }
+                } label: {
+                    if let file, model.loadingPreview == file {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+                    }
+                }
+                .disabled(file == nil)
+                .help(isPlaying ? "Pause (Space)" : "Play (Space)")
+                Button {
+                    model.stopPreview()
+                } label: {
+                    Image(systemName: "stop.fill")
+                }
+                .disabled(loaded == nil)
+                .help("Stop")
+                Spacer()
+                Text("-" + formatTime(max((loaded?.duration ?? 0) - (loaded?.position ?? 0), 0)))
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.borderless)
+            .font(.title3)
+
+            Button {
+                model.addLibraryFilesToBank(selected)
+            } label: {
+                Label(addTitle, systemImage: "square.grid.3x3.square")
+                    .frame(maxWidth: .infinity)
+            }
+            .disabled(selected.isEmpty)
+            .help("Make a pad for each selected file on the bank shown (Return)")
+        }
+        .padding(.horizontal, 12)
+        .padding(.top, 2)
+    }
+
+    /// The player's state, if it holds this file.
+    private var loaded: PreviewInfo? {
+        guard let playing = model.libraryPlaying, playing.file == file else { return nil }
+        return playing
+    }
+
+    private var isPlaying: Bool { loaded?.playing == true }
+
+    private var progress: Double {
+        guard let loaded, loaded.duration > 0 else { return 0 }
+        return loaded.position / loaded.duration
+    }
+
+    private var title: String {
+        guard let file else { return selected.count > 1 ? "\(selected.count) files selected" : "Select a file" }
+        return URL(fileURLWithPath: file).deletingPathExtension().lastPathComponent
+    }
+
+    private var previewLabel: String {
+        if let index = model.show.previewOutput, model.show.outputs.indices.contains(index) {
+            return "Preview Output (\(model.show.outputs[index].name))"
+        }
+        return "Preview Output (not set)"
+    }
+
+    private var addTitle: String {
+        let bank = model.show.banks.indices.contains(model.currentBank) ? model.show.banks[model.currentBank] : "Bank"
+        switch selected.count {
+        case 0: return "Add to \(bank)"
+        case 1: return "Add to \(bank)"
+        default: return "Add \(selected.count) to \(bank)"
+        }
     }
 }

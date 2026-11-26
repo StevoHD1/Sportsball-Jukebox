@@ -46,6 +46,20 @@ struct ShowDoc: Codable, Equatable {
     var markPlayed = true
     /// Folders whose new audio files are added to the library.
     var watchFolders: [WatchFolder] = []
+    /// Banks with their own settings for new pads.
+    var bankDefaults: [BankDefaults] = []
+    /// Where the library's player plays; nil = the preview output.
+    var libraryOutput: Int?
+
+    /// What new pads on `bank` get: the bank's own settings, else the
+    /// show's.
+    func defaults(forBank bank: Int) -> PadDefaults {
+        bankDefaults.first { $0.bank == bank }?.defaults ?? padDefaults ?? PadDefaults()
+    }
+
+    func hasOwnDefaults(bank: Int) -> Bool {
+        bankDefaults.contains { $0.bank == bank }
+    }
 
     /// The preset with this colour value, if any.
     func preset(for value: String?) -> ShowColor? {
@@ -66,6 +80,8 @@ struct ShowDoc: Codable, Equatable {
         case playedColor = "played_color"
         case markPlayed = "mark_played"
         case watchFolders = "watch_folders"
+        case bankDefaults = "bank_defaults"
+        case libraryOutput = "library_output"
     }
 
     /// Global slot numbers of a bank's pads.
@@ -97,6 +113,8 @@ struct ShowDoc: Codable, Equatable {
         playedColor = try c.decodeIfPresent(String.self, forKey: .playedColor)
         markPlayed = try c.value(.markPlayed, or: true)
         watchFolders = try c.value(.watchFolders, or: [])
+        bankDefaults = try c.value(.bankDefaults, or: [])
+        libraryOutput = try c.decodeIfPresent(Int.self, forKey: .libraryOutput)
         outputs = try c.value(.outputs, or: outputs)
         cues = try c.value(.cues, or: cues)
     }
@@ -156,17 +174,27 @@ struct WatchFolder: Codable, Equatable, Hashable {
     var path: String
     /// Also watch the folders inside it.
     var subfolders = true
+    /// Download files that are only in the cloud (Box Drive, iCloud).
+    var download = true
 
-    init(path: String, subfolders: Bool = true) {
+    init(path: String, subfolders: Bool = true, download: Bool = true) {
         self.path = path
         self.subfolders = subfolders
+        self.download = download
     }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         path = try c.decode(String.self, forKey: .path)
         subfolders = try c.decodeIfPresent(Bool.self, forKey: .subfolders) ?? true
+        download = try c.decodeIfPresent(Bool.self, forKey: .download) ?? true
     }
+}
+
+/// A bank's own settings for new pads.
+struct BankDefaults: Codable, Equatable {
+    var bank: Int
+    var defaults: PadDefaults
 }
 
 struct ShowColor: Codable, Equatable, Hashable {
@@ -333,6 +361,9 @@ struct LibraryEntry: Decodable, Equatable, Identifiable {
     var duration: Double?
     var loudness: Double?
     var error: String?
+    /// Only in the cloud (Box Drive, iCloud), not on this Mac yet.
+    var onlineOnly: Bool
+    var downloading: Bool
 
     var id: String { file }
     var name: String { URL(fileURLWithPath: file).deletingPathExtension().lastPathComponent }
@@ -701,6 +732,8 @@ struct PreviewInfo: Decodable, Equatable {
     /// The library file being previewed, if any.
     var file: String?
     var playing: Bool
+    /// Paused (play carries on from here).
+    var paused: Bool
     var position: Double
     var duration: Double
 }
@@ -717,6 +750,8 @@ struct SessionStatus: Decodable, Equatable {
     var played: [Int]
     /// Counts imports from watch folders (reload the library on change).
     var watchImports: UInt64
+    /// Changes as cloud downloads start and finish.
+    var downloads: UInt64
     /// Watch folders that can't be read right now.
     var missingWatchFolders: [String]
     var previewOutput: Int?

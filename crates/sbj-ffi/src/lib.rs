@@ -556,6 +556,7 @@ pub unsafe extern "C" fn sbj_session_status_json(session: *const SbjSession) -> 
                     "slot": p.slot,
                     "file": p.file,
                     "playing": p.playing,
+                    "paused": p.paused,
                     "position": p.position_seconds,
                     "duration": p.duration_seconds,
                 })
@@ -572,6 +573,7 @@ pub unsafe extern "C" fn sbj_session_status_json(session: *const SbjSession) -> 
                 "standby": session.standby(),
                 "played": session.played(),
                 "watch_imports": session.watch_imports(),
+                "downloads": session.download_changes(),
                 "missing_watch_folders": session.missing_watch_folders(),
                 "undo": session.undo_label(),
                 "redo": session.redo_label(),
@@ -1113,6 +1115,71 @@ pub unsafe extern "C" fn sbj_session_set_pad_defaults_json(
     }
 }
 
+/// Sets a page's own settings for new pads (JSON as for
+/// `sbj_session_set_pad_defaults_json`); null or "null" makes the page use
+/// the show's. `bank` is 0-based.
+///
+/// # Safety
+/// `session` must be null or a live session; `json` null or a valid
+/// string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sbj_session_set_bank_defaults_json(
+    session: *const SbjSession,
+    bank: u32,
+    json: *const c_char,
+) -> SbjStatus {
+    // SAFETY: forwarded caller contract.
+    let defaults: Option<sbj_session::PadDefaults> = match unsafe { read_str(json) } {
+        Err(status) => return status,
+        Ok(None) => None,
+        Ok(Some(j)) => match serde_json::from_str(j) {
+            Ok(d) => d,
+            Err(e) => {
+                return fail(
+                    SbjStatus::InvalidArgument,
+                    format!("bad page defaults: {e}"),
+                );
+            }
+        },
+    };
+    // SAFETY: forwarded caller contract.
+    unsafe {
+        with_session(session, |s| {
+            session_status(s.lock().set_bank_defaults(bank, defaults))
+        })
+    }
+}
+
+/// Gives existing pads their page's settings for new pads (colour, fades,
+/// loop, group, output, ducking, level matching): every pad, or with
+/// `bank` >= 0 only that page's. `changed` (may be null) receives how many
+/// pads changed.
+///
+/// # Safety
+/// `session` must be null or a live session; `changed` null or valid.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sbj_session_apply_pad_defaults(
+    session: *const SbjSession,
+    bank: i32,
+    changed: *mut u32,
+) -> SbjStatus {
+    // SAFETY: forwarded caller contract.
+    unsafe {
+        with_session(session, |s| {
+            match s.lock().apply_pad_defaults(u32::try_from(bank).ok()) {
+                Ok(count) => {
+                    if !changed.is_null() {
+                        // SAFETY: caller contract: null or valid.
+                        *changed = u32::try_from(count).unwrap_or(u32::MAX);
+                    }
+                    SbjStatus::Ok
+                }
+                Err(e) => session_status(Err(e)),
+            }
+        })
+    }
+}
+
 /// Replaces the show's colour presets with a JSON array
 /// `[{"name", "value": "#RRGGBB"}]`. With `recolor`, pads using a preset
 /// whose colour changed (matched by name) take the new colour.
@@ -1166,6 +1233,8 @@ pub unsafe extern "C" fn sbj_session_library_json(session: *const SbjSession) ->
                         "duration": e.duration_seconds,
                         "loudness": e.loudness_lufs,
                         "error": e.error,
+                        "online_only": e.online_only,
+                        "downloading": e.downloading,
                     })
                 })
                 .collect();
@@ -1878,6 +1947,64 @@ pub unsafe extern "C" fn sbj_session_stop_preview(session: *const SbjSession) ->
             SbjStatus::Ok
         })
     }
+}
+
+/// Pauses the preview (the library's player) where it is.
+///
+/// # Safety
+/// `session` must be null or a live session.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sbj_session_pause_preview(session: *const SbjSession) -> SbjStatus {
+    // SAFETY: forwarded caller contract.
+    unsafe { with_session(session, |s| session_status(s.lock().pause_preview())) }
+}
+
+/// Carries on a paused preview.
+///
+/// # Safety
+/// `session` must be null or a live session.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sbj_session_resume_preview(session: *const SbjSession) -> SbjStatus {
+    // SAFETY: forwarded caller contract.
+    unsafe { with_session(session, |s| session_status(s.lock().resume_preview())) }
+}
+
+/// Chooses where the library's player plays (output index); negative =
+/// the preview output.
+///
+/// # Safety
+/// `session` must be null or a live session.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sbj_session_set_library_output(
+    session: *const SbjSession,
+    output: i32,
+) -> SbjStatus {
+    let output = u32::try_from(output).ok();
+    // SAFETY: forwarded caller contract.
+    unsafe {
+        with_session(session, |s| {
+            session_status(s.lock().set_library_output(output))
+        })
+    }
+}
+
+/// Downloads a library file that's only in the cloud (Box Drive, iCloud),
+/// in the background.
+///
+/// # Safety
+/// `session` must be null or a live session; `file` a valid string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sbj_session_download_file(
+    session: *const SbjSession,
+    file: *const c_char,
+) -> SbjStatus {
+    // SAFETY: forwarded caller contract.
+    let file = match unsafe { required_str(file, "file") } {
+        Ok(f) => f.to_owned(),
+        Err(status) => return status,
+    };
+    // SAFETY: forwarded caller contract.
+    unsafe { with_session(session, |s| session_status(s.lock().download_file(&file))) }
 }
 
 /// Chooses the output (index) used for previews; negative turns preview
