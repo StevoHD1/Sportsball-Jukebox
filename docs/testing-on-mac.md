@@ -300,6 +300,13 @@ built-in speakers or headphones)
       everything else -15 dB for 4 s; Switch to bank. Fire it from a key,
       MIDI and the rundown: each time all of them happen, in order.
 - [ ] Make two pads fire each other: firing one doesn't hang the app.
+- [ ] Pad editor → Colour menu → Save This Colour as a Preset…: it's
+      listed under Show colours on every pad, and in Show Settings → New
+      pads. Show → Colour Presets…: change its colour with "Recolour pads"
+      on: every pad using it changes. Save, open the show on another Mac:
+      the presets are there.
+- [ ] A custom-coloured pad looks the same colour as its swatch in the
+      Colour menu (not darker).
 
 **Stress**
 - [ ] Leave a looping cue running for 10+ minutes. The status line should

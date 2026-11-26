@@ -517,6 +517,14 @@ targets follow pads that move or are renumbered, the pre-game check
 flags actions on empty pads, and pads with actions show a ⚡ tag whose
 tooltip lists them.
 
+**Colours:** ready pads draw their exact colour (so it can be matched by
+eye or eyedropper); pads that can't play are faded. The show keeps named
+**colour presets** (`colors`, `{name, value: "#RRGGBB"}`), listed first
+in a pad's Colour menu, then the standard colours, then other custom
+colours already used in the show. Changing a preset's colour can
+recolour every pad (and the new-pad default) using it
+(`set_show_colors(…, recolor)`).
+
 ## Play log (Phase 7)
 
 `sbj-session/src/log.rs` records each time a pad or playlist song starts:
