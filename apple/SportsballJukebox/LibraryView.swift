@@ -20,6 +20,18 @@ struct LibraryView: View {
                 Text("Library").font(.headline)
                 Spacer()
                 Button {
+                    model.showingWatchFolders.toggle()
+                } label: {
+                    Label("Watch Folders…", systemImage: watchIcon)
+                }
+                .labelStyle(.iconOnly)
+                .foregroundStyle(watchMissing ? Color.orange : Color.primary)
+                .help(watchHelp)
+                .popover(isPresented: $model.showingWatchFolders, arrowEdge: .bottom) {
+                    WatchFoldersView()
+                        .environmentObject(model)
+                }
+                Button {
                     model.importToLibrary()
                 } label: {
                     Label("Add Files or Folders…", systemImage: "plus")
@@ -100,6 +112,22 @@ struct LibraryView: View {
             model.suspendHotkeys = focused
         }
         .onDisappear { model.suspendHotkeys = false }
+    }
+
+    private var watchMissing: Bool {
+        !(model.status?.missingWatchFolders.isEmpty ?? true)
+    }
+
+    private var watchIcon: String {
+        if watchMissing { return "exclamationmark.triangle" }
+        return model.show.watchFolders.isEmpty ? "eye" : "eye.fill"
+    }
+
+    private var watchHelp: String {
+        let count = model.show.watchFolders.count
+        if watchMissing { return "A watch folder can't be found" }
+        if count == 0 { return "Watch folders: add new audio files to the library automatically" }
+        return "Watching \(count) folder\(count == 1 ? "" : "s") for new audio files"
     }
 
     private var entries: [LibraryEntry] {

@@ -106,7 +106,8 @@ char *sbj_session_show_json(const SbjSession *session);
 /* {"game", "preview_output": number|null,
  *  "preview": {"slot" (4294967295 for a library file), "file": string|null,
  *  "playing","position","duration"}|null,
- *  "bank", "standby": index|null, "played": [slot], "undo": label|null, "redo": label|null, "last": slot|null (most recently
+ *  "bank", "standby": index|null, "played": [slot],
+ *  "watch_imports": number, "missing_watch_folders": [path], "undo": label|null, "redo": label|null, "last": slot|null (most recently
  *  fired pad still playing), "single_play": [bank],
  *  "learning": "cue:N|stop_all|next_bank|prev_bank|rundown_go|fade_last"|null,
  *  "last_control": string|null, "midi_inputs": [string]|null (null = MIDI off),
@@ -156,7 +157,7 @@ SbjStatus sbj_session_reset_played(const SbjSession *session, int32_t bank);
 /* Event log, oldest first (the last 500; also appended to
  * <log dir>/events-YYYY-MM-DD.jsonl): [{"time": unix seconds,
  * "level": "info"|"warning"|"error", "kind": "glitch"|"device"|"fire"|
- * "show"|"notice", "message": string}]. Free with sbj_string_free. */
+ * "show"|"library"|"notice", "message": string}]. Free with sbj_string_free. */
 char *sbj_session_events_json(const SbjSession *session);
 /* Zero every output's glitch count ("xruns" in the status JSON). */
 SbjStatus sbj_session_reset_glitches(const SbjSession *session);
@@ -192,6 +193,12 @@ char *sbj_session_library_json(const SbjSession *session);
 SbjStatus sbj_session_add_to_library_json(const SbjSession *session, const char *json);
 /* Refused (SHOW_ERROR) while a pad uses the file. */
 SbjStatus sbj_session_remove_from_library(const SbjSession *session, const char *file);
+/* Watch folders (saved with the show; show JSON "watch_folders"): new
+ * audio files in them join the library once they've finished copying.
+ * [{"path": string, "subfolders"?: bool (default true)}]. Status JSON
+ * "watch_imports" counts imports (reload the library when it changes);
+ * "missing_watch_folders": [path] can't be read. */
+SbjStatus sbj_session_set_watch_folders_json(const SbjSession *session, const char *json);
 /* SLOW the first time (decodes): play a file on the preview output;
  * again stops it. */
 SbjStatus sbj_session_preview_file(const SbjSession *session, const char *file);

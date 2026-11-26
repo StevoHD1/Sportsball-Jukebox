@@ -24,7 +24,7 @@ pub struct EventEntry {
     pub time: f64,
     /// "info", "warning" or "error".
     pub level: &'static str,
-    /// "glitch", "device", "fire", "show" or "notice".
+    /// "glitch", "device", "fire", "show", "library" or "notice".
     pub kind: &'static str,
     pub message: String,
 }

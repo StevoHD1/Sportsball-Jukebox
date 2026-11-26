@@ -571,6 +571,8 @@ pub unsafe extern "C" fn sbj_session_status_json(session: *const SbjSession) -> 
                 "bank": session.current_bank(),
                 "standby": session.standby(),
                 "played": session.played(),
+                "watch_imports": session.watch_imports(),
+                "missing_watch_folders": session.missing_watch_folders(),
                 "undo": session.undo_label(),
                 "redo": session.redo_label(),
                 "last": session.last_playing(),
@@ -1194,6 +1196,41 @@ pub unsafe extern "C" fn sbj_session_add_to_library_json(
     unsafe {
         with_session(session, |s| {
             s.lock().add_to_library(files);
+            SbjStatus::Ok
+        })
+    }
+}
+
+/// Sets the show's watch folders, whose new audio files are added to the
+/// library: a JSON array `[{"path": string, "subfolders"?: bool}]`
+/// (`subfolders` defaults to true). Status JSON `"watch_imports"` counts
+/// imports (reload the library when it changes) and
+/// `"missing_watch_folders"` lists folders that can't be read.
+///
+/// # Safety
+/// `session` must be null or a live session; `json` a valid string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sbj_session_set_watch_folders_json(
+    session: *const SbjSession,
+    json: *const c_char,
+) -> SbjStatus {
+    // SAFETY: forwarded caller contract.
+    let folders: Vec<sbj_session::WatchFolder> = match unsafe { required_str(json, "json") }
+        .and_then(|j| {
+            serde_json::from_str(j).map_err(|e| {
+                fail(
+                    SbjStatus::InvalidArgument,
+                    format!("bad watch folder list: {e}"),
+                )
+            })
+        }) {
+        Ok(folders) => folders,
+        Err(status) => return status,
+    };
+    // SAFETY: forwarded caller contract.
+    unsafe {
+        with_session(session, |s| {
+            s.lock().set_watch_folders(folders);
             SbjStatus::Ok
         })
     }

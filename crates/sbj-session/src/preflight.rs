@@ -44,6 +44,19 @@ impl<B: AudioBackend> Session<B> {
         let mut checks = Vec::new();
         let mut add = |level, message: String| checks.push(Check { level, message });
 
+        // Watch folders (read directly: the scan may not have run yet).
+        for folder in &self.show.watch_folders {
+            if !std::path::Path::new(&folder.path).is_dir() {
+                add(
+                    CheckLevel::Warning,
+                    format!(
+                        "The watch folder \"{}\" can't be found; new clips there won't reach the library.",
+                        folder.path
+                    ),
+                );
+            }
+        }
+
         // Outputs.
         for output in self.outputs_state() {
             let device = output.device_name.clone().unwrap_or_default();
@@ -76,7 +89,7 @@ impl<B: AudioBackend> Session<B> {
                 add(
                     CheckLevel::Warning,
                     format!(
-                        "Output \"{}\" has glitched {} time(s) since it was opened.",
+                        "Output \"{}\" has glitched {} time(s) since it was opened (see the Event Log).",
                         output.name, output.xruns
                     ),
                 );

@@ -87,6 +87,9 @@ impl<B: AudioBackend> Session<B> {
         if self.show.library.len() != before {
             self.dirty = true;
         }
+        // Files are managed in the Finder: a file still in a watch folder
+        // comes back on the next scan.
+        self.forget_watched(file);
         Ok(())
     }
 
