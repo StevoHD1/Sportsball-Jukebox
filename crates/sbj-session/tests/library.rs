@@ -132,3 +132,43 @@ fn pictures_are_found_in_an_images_folder_beside_the_show() {
         None
     );
 }
+
+#[test]
+fn colour_presets_are_kept_and_can_recolour_pads() {
+    use sbj_session::ShowColor;
+    let backend = two_devices();
+    let mut s = session(&backend);
+    s.add_sound("a".into(), constant(0.5, 100));
+    let mut home = CueDoc::simple(0, "Home", "a");
+    home.color = Some("#c8102e".into());
+    s.set_cue(home).unwrap();
+    let mut away = CueDoc::simple(1, "Away", "a");
+    away.color = Some("blue".into());
+    s.set_cue(away).unwrap();
+
+    let preset = |name: &str, value: &str| ShowColor {
+        name: name.into(),
+        value: value.into(),
+    };
+    s.set_show_colors(
+        vec![
+            preset("Home red", "#c8102e"),
+            preset("  ", "#000000"), // no name: dropped
+            preset("Broken", "red"), // not #RRGGBB: dropped
+        ],
+        true,
+    );
+    assert_eq!(s.show().colors, [preset("Home red", "#C8102E")]);
+
+    // Changing the preset's colour recolours the pads using it.
+    let recoloured = s.set_show_colors(vec![preset("Home red", "#AA0000")], true);
+    assert_eq!(recoloured, 1);
+    assert_eq!(s.show().cue(0).unwrap().color.as_deref(), Some("#AA0000"));
+    assert_eq!(s.show().cue(1).unwrap().color.as_deref(), Some("blue"));
+    // Without recolouring, pads keep their colour.
+    s.set_show_colors(vec![preset("Home red", "#BB0000")], false);
+    assert_eq!(s.show().cue(0).unwrap().color.as_deref(), Some("#AA0000"));
+
+    let back = Show::from_json(&s.show().to_json()).unwrap();
+    assert_eq!(back.colors, [preset("Home red", "#BB0000")]);
+}

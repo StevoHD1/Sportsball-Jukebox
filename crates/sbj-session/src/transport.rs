@@ -89,20 +89,22 @@ impl<B: AudioBackend> Session<B> {
         !self.show.single_play.contains(&bank)
     }
 
-    /// Single-play banks: fade out the bank's other playing pads when one
-    /// is fired (over the show's group hand-over time).
+    /// Single-play (a solo pad, or a pad in a bank with Multiplay off):
+    /// fade out the bank's other playing pads when one is fired, over the
+    /// show's group hand-over time. Pads set to play over everything are
+    /// left alone.
     pub(crate) fn single_play_handover(&mut self, slot: u32) {
-        let slots = self.show.slots.max(1);
-        let bank = slot / slots;
-        if self.bank_multiplay(bank) {
+        if !self.plays_solo(slot) {
             return;
         }
+        let slots = self.show.slots.max(1);
+        let bank = slot / slots;
         let others: Vec<u32> = self
             .show
             .cues
             .iter()
             .map(|c| c.slot)
-            .filter(|&s| s != slot && s / slots == bank)
+            .filter(|&s| s != slot && s / slots == bank && !self.plays_over(s))
             .collect();
         let fade = self.show.group_fade;
         for other in others {

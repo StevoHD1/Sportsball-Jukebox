@@ -40,6 +40,20 @@ enum PadColor: String, CaseIterable {
         )
     }
 
+    /// A small colour swatch for menus (not a template image, so menus
+    /// keep its colour).
+    static func swatch(_ color: Color) -> NSImage {
+        let image = NSImage(size: NSSize(width: 14, height: 14), flipped: false) { rect in
+            NSColor(color).setFill()
+            NSBezierPath(roundedRect: rect.insetBy(dx: 1, dy: 1), xRadius: 3, yRadius: 3).fill()
+            NSColor.black.withAlphaComponent(0.25).setStroke()
+            NSBezierPath(roundedRect: rect.insetBy(dx: 1, dy: 1), xRadius: 3, yRadius: 3).stroke()
+            return true
+        }
+        image.isTemplate = false
+        return image
+    }
+
     /// "#RRGGBB" for a colour from the colour picker.
     static func hex(_ color: Color) -> String? {
         guard let rgb = NSColor(color).usingColorSpace(.sRGB) else { return nil }
@@ -84,11 +98,13 @@ struct CueButton: View {
                 cue: cue,
                 image: cue.flatMap { model.padImage(for: $0) },
                 height: height,
+                played: model.isPlayed(slot),
+                playedColor: model.show.playedColor,
                 state: state,
                 hasProblems: !problems.isEmpty,
                 isBusy: isBusy
             )
-            .overlay(shape.strokeBorder(borderColor, lineWidth: isDropTarget || isLearning ? 3 : 1))
+            .overlay(shape.strokeBorder(borderColor, lineWidth: isDropTarget || isLearning || state.playing ? 3 : 1))
             .contentShape(shape)
         }
         .buttonStyle(.plain)
@@ -137,6 +153,8 @@ struct CueButton: View {
             parts.append("Not ready")
         }
         if let key = cue?.hotkey { parts.append("Key \(key.uppercased())") }
+        if cue?.hasActions == true { parts.append("Has actions") }
+        if model.isPlayed(slot) { parts.append("Played") }
         if !problems.isEmpty { parts.append("Has problems") }
         return parts.joined(separator: ", ")
     }
@@ -145,12 +163,18 @@ struct CueButton: View {
         if isDropTarget { return .accentColor }
         if isLearning { return .orange }
         if !problems.isEmpty { return .orange }
-        return state.playing ? .green : Color.secondary.opacity(0.25)
+        // Playing pads keep their own colour, so a thick white border (and
+        // the progress fill) marks them; a green border would be lost on a
+        // green pad.
+        return state.playing ? .white : Color.secondary.opacity(0.25)
     }
 
     private var helpText: String {
         guard let cue else { return "Click or drop an audio file to assign a sound" }
-        return ([cue.title] + problems).joined(separator: "\n")
+        var lines = [cue.title]
+        if cue.playMode != .bank { lines.append("⚡ " + cue.playMode.label) }
+        lines += cue.onFire.map { "⚡ " + $0.describe(in: model.show) }
+        return (lines + problems).joined(separator: "\n")
     }
 
     @ViewBuilder
@@ -158,6 +182,9 @@ struct CueButton: View {
         if let cue {
             Button("Edit Pad…") { model.editing = EditTarget(id: slot) }
             Button("Add to Rundown") { model.addToRundown(pad: slot) }
+            Button(model.isPlayed(slot) ? "Unmark as Played" : "Mark as Played") {
+                model.setPlayed(slot, !model.isPlayed(slot))
+            }
             Button("Preview in Headphones (⌥-click)") { model.preview(slot) }
                 .disabled(!model.canPreview)
             if cue.playlist != nil {
@@ -199,6 +226,9 @@ private struct PadFace: View {
     let cue: CueDoc?
     let image: NSImage?
     let height: CGFloat
+    /// Marked as played (shown in the played colour, with a ✓).
+    let played: Bool
+    let playedColor: String?
     let state: CueStatus
     let hasProblems: Bool
     let isBusy: Bool
@@ -211,7 +241,7 @@ private struct PadFace: View {
 
             if let image {
                 // The picture fills the pad; a dark fade at the bottom keeps
-                // the title readable, and a green wash shows it playing.
+                // the title readable.
                 Color.clear
                     .overlay(
                         Image(nsImage: image)
@@ -226,9 +256,6 @@ private struct PadFace: View {
                     endPoint: .bottom
                 )
                 .clipShape(shape)
-                if state.playing {
-                    shape.fill(Color.green.opacity(0.35))
-                }
             }
 
             GeometryReader { geometry in
@@ -290,6 +317,19 @@ private struct PadFace: View {
                     .background(Color.orange, in: Capsule())
                     .foregroundStyle(.black)
             }
+            if played {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.caption)
+                    .accessibilityLabel("Played")
+            }
+            if cue?.hasActions == true {
+                // Plays over / solo, or runs actions when fired.
+                Image(systemName: "bolt.fill")
+                    .font(.caption)
+                    .padding(3)
+                    .background(Color.black.opacity(0.3), in: Circle())
+                    .accessibilityLabel("Has actions")
+            }
             if hasProblems {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .foregroundStyle(.yellow)
@@ -332,9 +372,13 @@ private struct PadFace: View {
 
     private var background: Color {
         guard let cue else { return Color.secondary.opacity(0.12) }
-        if state.playing { return Color.green.opacity(0.85) }
+        if played, !state.playing, let playedColor {
+            return PadColor.color(named: playedColor)
+        }
         let base = PadColor.color(named: cue.color)
-        return state.ready ? base.opacity(0.75) : base.opacity(0.35)
+        // Ready pads show their exact colour (so it can be matched); pads
+        // that can't play are faded.
+        return state.ready ? base : base.opacity(0.35)
     }
 
     private var timeText: String {

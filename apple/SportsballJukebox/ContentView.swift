@@ -83,8 +83,16 @@ struct ContentView: View {
             PreflightView()
                 .environmentObject(model)
         }
+        .sheet(isPresented: $model.showingColours) {
+            ColourPresetsView()
+                .environmentObject(model)
+        }
         .sheet(isPresented: $model.showingLog) {
             GameLogView()
+                .environmentObject(model)
+        }
+        .sheet(isPresented: $model.showingEvents) {
+            EventLogView()
                 .environmentObject(model)
         }
     }
@@ -194,6 +202,14 @@ private struct HeaderBar: View {
             .help("What played, for licensing and sponsor reports")
 
             Button {
+                model.showingEvents = true
+            } label: {
+                Label("Event Log", systemImage: "stethoscope")
+            }
+            .labelStyle(.iconOnly)
+            .help("Glitches, device problems and warnings, with times (⇧⌘E)")
+
+            Button {
                 model.showingControls = true
             } label: {
                 Label("Control", systemImage: "pianokeys")
@@ -246,6 +262,7 @@ private struct HeaderBar: View {
 }
 
 private struct OutputBadge: View {
+    @EnvironmentObject private var model: AppModel
     let output: OutputState
 
     var body: some View {
@@ -258,7 +275,14 @@ private struct OutputBadge: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
         }
-        .help(output.error ?? (output.deviceName ?? ""))
+        .contentShape(Rectangle())
+        .onTapGesture { model.showingEvents = true }
+        .help(help)
+    }
+
+    private var help: String {
+        let base = output.error ?? (output.deviceName ?? "")
+        return output.xruns > 0 ? "\(base)\nClick to see when the glitches happened" : base
     }
 
     private var color: Color {
@@ -361,6 +385,15 @@ private struct BankBar: View {
                 .accessibilityAddTraits(index == model.currentBank ? .isSelected : [])
             }
             Spacer()
+            if model.playedOnThisBank > 0 {
+                Button {
+                    model.resetPlayed(bank: model.currentBank)
+                } label: {
+                    Label("Reset Played (\(model.playedOnThisBank))", systemImage: "arrow.counterclockwise")
+                }
+                .controlSize(.small)
+                .help("Unmark this page's pads as played")
+            }
             Toggle("Multiplay", isOn: multiplay)
                 .toggleStyle(.switch)
                 .controlSize(.small)

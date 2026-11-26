@@ -1,6 +1,6 @@
 # Sportsball Jukebox: Architecture
 
-Status: Phase 14 (undo, Save With Audio). Last updated 2026-11-24.
+Status: Phase 15 (pad actions). Last updated 2026-11-24.
 
 ## Goals, in priority order
 
@@ -499,13 +499,48 @@ the pre-game check warns about steps on empty pads.
   names (nothing reloads or stops). Missing files are skipped and
   reported. The folder then opens anywhere.
 
+## Pad actions (Phase 15)
+
+Each pad has a **play mode** (`play_mode`): follow the bank's Multiplay
+(default), **over** (never fades other pads, and single-play hand-overs
+leave it alone, e.g. horns over music) or **solo** (fades out the bank's
+other pads even in a Multiplay bank). And a list of **actions**
+(`on_fire`, `sbj-session/src/actions.rs`) run in order each time it
+starts, however it was fired (including rundown and marker starts):
+stop other pads (all, or this bank; with a fade), fire a pad (now, or
+after a delay, timed on the control side within a poll), stop a pad,
+duck everything else by N dB for X seconds (folded into the ducking
+calculation, which also handles per-pad ducking; the deepest wins), and
+switch bank. Pads started by actions are logged as `action`. Nesting is
+capped at four levels, so pads that fire each other can't loop. Action
+targets follow pads that move or are renumbered, the pre-game check
+flags actions on empty pads, and pads with actions show a ⚡ tag whose
+tooltip lists them.
+
+**Colours:** ready pads draw their exact colour (so it can be matched by
+eye or eyedropper); pads that can't play are faded. The show keeps named
+**colour presets** (`colors`, `{name, value: "#RRGGBB"}`), listed first
+in a pad's Colour menu, then the standard colours, then other custom
+colours already used in the show. Changing a preset's colour can
+recolour every pad (and the new-pad default) using it
+(`set_show_colors(…, recolor)`).
+
+**Played pads** (`played.rs`): the session keeps which pads have been
+used this game (not saved with the show, so firing doesn't make the
+show "edited" or fill the undo history; cleared when a show opens).
+With a played colour set in the show (`played_color`), pads are marked
+as they fire (`mark_played`, on by default), however they're fired, and
+show in that colour with a ✓ when not playing. Marks can be set by hand,
+follow pads that move, and reset per page or for all pages. The remote
+shows them too.
+
 ## Play log (Phase 7)
 
 `sbj-session/src/log.rs` records each time a pad or playlist song starts:
 the time, game name, show, bank and pad, title, the audio file, the
 sponsor (a per-pad field), the output, and what triggered it (`operator`,
-`midi`, `osc`, `remote`, `marker`, `rundown`, or `auto` for playlist
-auto-advance). Entries close when
+`midi`, `osc`, `remote`, `marker`, `rundown`, `action`, or `auto` for
+playlist auto-advance). Entries close when
 the sound stops, finishes or is replaced, and the time played is
 measured on the wall clock. Closed entries are appended as JSON lines to
 `<log dir>/YYYY-MM-DD.jsonl` (UTC days) straight away, so a crash loses
@@ -517,6 +552,30 @@ thread.
 The Game Log window shows recent plays, totals per song (for music
 licensing returns) and per sponsor (for sponsorship fulfilment), and
 exports CSV with local dates and times.
+
+**Event log** (`diagnostics.rs`): what went wrong, and when. Each entry
+has a time, a level (`info`, `warning`, `error`), a kind (`glitch`,
+`device`, `fire`, `show`, `notice`) and a message. Logged:
+
+- glitches (audio xruns counted by the backend's `StreamStatus`): `poll`
+  compares each output's count with the last one it saw and logs the
+  new ones, naming the output, the device and the pads playing on it;
+- outputs opening on a device (with rate and channels), failing to find
+  one (only when the error changes, not on every retry), losing their
+  device and switching to the backup;
+- pads that fail to fire, audio files that couldn't be loaded when a
+  show opens, and failed saves;
+- every operator notice (`notify` both queues the notice and logs it).
+
+The last 500 events stay in memory (`sbj_session_events_json`); all of
+them are appended to `<log dir>/events-YYYY-MM-DD.jsonl`. Resetting the
+glitch count (`sbj_session_reset_glitches`) stores an offset per output,
+so the status JSON's `xruns` counts from zero while the log keeps the
+history. The Event Log window (Show → Event Log…, ⇧⌘E, or click an
+output's status in the header) lists them, filters problems or
+glitches, resets the count and copies a diagnostics report (Mac model,
+macOS and app versions, outputs, devices, recent events) for bug
+reports.
 
 ## Performance
 
@@ -671,6 +730,11 @@ CI.
 **Phase 14: Undo and Save With Audio (built; awaiting Mac testing)**
 - Edit → Undo / Redo for show edits, reloading only what changed.
 - File → Save With Audio… makes a self-contained show folder.
+
+**Phase 15: Pad actions (built; awaiting Mac testing)**
+- Play mode per pad (follow bank / play over / solo).
+- On-fire actions: stop others, fire or stop a pad (with delay/fade),
+  duck everything else for a while, switch bank; ⚡ tag on the pad.
 
 **Next candidates**
 - Signed releases once there is a Developer account.

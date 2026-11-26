@@ -106,7 +106,7 @@ char *sbj_session_show_json(const SbjSession *session);
 /* {"game", "preview_output": number|null,
  *  "preview": {"slot" (4294967295 for a library file), "file": string|null,
  *  "playing","position","duration"}|null,
- *  "bank", "standby": index|null, "undo": label|null, "redo": label|null, "last": slot|null (most recently
+ *  "bank", "standby": index|null, "played": [slot], "undo": label|null, "redo": label|null, "last": slot|null (most recently
  *  fired pad still playing), "single_play": [bank],
  *  "learning": "cue:N|stop_all|next_bank|prev_bank|rundown_go|fade_last"|null,
  *  "last_control": string|null, "midi_inputs": [string]|null (null = MIDI off),
@@ -137,10 +137,29 @@ SbjStatus sbj_session_undo(const SbjSession *session);
 SbjStatus sbj_session_redo(const SbjSession *session);
 /* {"name", "slots" (pads per bank), "columns", "banks": [names],
  *  "stop_all_fade"?: seconds, "level_match"?: LUFS|null (null = off;
- *  absent = unchanged; changing it reloads, and so stops, every pad)}.
+ *  absent = unchanged; changing it reloads, and so stops, every pad),
+ *  "played_color"?: "#RRGGBB"|name|null (colour of played pads; null =
+ *  off), "mark_played"?: bool (firing marks pads as played)}.
  * Cue slots are bank * slots + pad; resizing keeps each cue's bank/pad. */
 SbjStatus sbj_session_set_show_settings_json(const SbjSession *session, const char *json);
 /* ---- Live transport ---------------------------------------------------- */
+
+/* "Played" marks (status JSON "played": [slot]); not saved in the show,
+ * cleared when a show is opened. With a played colour set, firing a pad
+ * marks it. */
+SbjStatus sbj_session_set_played(const SbjSession *session, uint32_t slot, bool played);
+/* bank 0-based; negative = every bank. */
+SbjStatus sbj_session_reset_played(const SbjSession *session, int32_t bank);
+
+/* ---- Diagnostics ------------------------------------------------------- */
+
+/* Event log, oldest first (the last 500; also appended to
+ * <log dir>/events-YYYY-MM-DD.jsonl): [{"time": unix seconds,
+ * "level": "info"|"warning"|"error", "kind": "glitch"|"device"|"fire"|
+ * "show"|"notice", "message": string}]. Free with sbj_string_free. */
+char *sbj_session_events_json(const SbjSession *session);
+/* Zero every output's glitch count ("xruns" in the status JSON). */
+SbjStatus sbj_session_reset_glitches(const SbjSession *session);
 
 /* Move a playing pad's playhead (scrubbing); no-op if it isn't playing. */
 SbjStatus sbj_session_seek_cue(const SbjSession *session, uint32_t slot, double seconds);
@@ -152,6 +171,11 @@ SbjStatus sbj_session_stop_last(const SbjSession *session, bool fade);
 SbjStatus sbj_session_set_bank_multiplay(const SbjSession *session, uint32_t bank, bool multiplay);
 
 /* ---- Library ------------------------------------------------------------ */
+
+/* Colour presets (the show's "colors"): [{"name", "value": "#RRGGBB"}].
+ * With recolor, pads using a preset whose colour changed (by name) take
+ * the new colour. Invalid entries are dropped. */
+SbjStatus sbj_session_set_show_colors_json(const SbjSession *session, const char *json, bool recolor);
 
 /* Settings for new pads: {"color"?, "fade_in"?, "fade_out"?, "loop"?,
  * "group"?, "output"?, "duck"?, "trim_silence"?, "level_match"?}

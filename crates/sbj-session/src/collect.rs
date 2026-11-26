@@ -166,7 +166,7 @@ impl<B: AudioBackend> Session<B> {
             }
         }
         if !plan.missing.is_empty() {
-            self.notices.push(format!(
+            self.notify(format!(
                 "{} file(s) could not be found and were not copied: {}",
                 plan.missing.len(),
                 plan.missing.join(", ")

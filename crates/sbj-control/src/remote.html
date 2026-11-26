@@ -277,10 +277,11 @@ function renderGrid() {
   state.pads.forEach((p, i) => {
     if (!p.assigned) return;
     const b = grid.children[i];
-    b.style.background = p.playing ? "#2f9e4c" : padColor(p.color);
+    const usePlayed = p.played && !p.playing && state.played_color;
+    b.style.background = p.playing ? "#2f9e4c" : padColor(usePlayed ? state.played_color : p.color);
     b.classList.toggle("notready", !p.ready);
     b.classList.toggle("playing", p.playing);
-    b.querySelector(".title").textContent = p.title;
+    b.querySelector(".title").textContent = (p.played ? "✓ " : "") + p.title;
     const sub = b.querySelector(".sub");
     sub.textContent = p.line;
     sub.style.display = p.line ? "" : "none";

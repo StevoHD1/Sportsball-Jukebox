@@ -38,6 +38,18 @@ struct ShowDoc: Codable, Equatable {
     var padDefaults: PadDefaults?
     /// Banks (0-based) with Multiplay off.
     var singlePlay: [Int] = []
+    /// Named colour presets kept with the show.
+    var colors: [ShowColor] = []
+    /// Colour played pads show in; nil = they keep their colour (✓ only).
+    var playedColor: String?
+    /// With a played colour, firing a pad marks it as played.
+    var markPlayed = true
+
+    /// The preset with this colour value, if any.
+    func preset(for value: String?) -> ShowColor? {
+        guard let value else { return nil }
+        return colors.first { $0.value.caseInsensitiveCompare(value) == .orderedSame }
+    }
 
     enum CodingKeys: String, CodingKey {
         case format, version, name, slots, columns, banks, outputs, cues, controls
@@ -48,6 +60,9 @@ struct ShowDoc: Codable, Equatable {
         case rundown, library
         case padDefaults = "pad_defaults"
         case singlePlay = "single_play"
+        case colors
+        case playedColor = "played_color"
+        case markPlayed = "mark_played"
     }
 
     /// Global slot numbers of a bank's pads.
@@ -75,6 +90,9 @@ struct ShowDoc: Codable, Equatable {
         library = try c.value(.library, or: [])
         padDefaults = try c.decodeIfPresent(PadDefaults.self, forKey: .padDefaults)
         singlePlay = try c.value(.singlePlay, or: [])
+        colors = try c.value(.colors, or: [])
+        playedColor = try c.decodeIfPresent(String.self, forKey: .playedColor)
+        markPlayed = try c.value(.markPlayed, or: true)
         outputs = try c.value(.outputs, or: outputs)
         cues = try c.value(.cues, or: cues)
     }
@@ -125,6 +143,112 @@ struct ControlsDoc: Codable, Equatable {
         case prevBank = "prev_bank"
         case rundownGo = "rundown_go"
         case fadeLast = "fade_last"
+    }
+}
+
+/// A named pad colour kept with the show.
+struct ShowColor: Codable, Equatable, Hashable {
+    var name: String
+    /// "#RRGGBB".
+    var value: String
+}
+
+/// How a pad treats its bank's Multiplay setting.
+enum PlayMode: String, Codable, CaseIterable {
+    case bank, over, solo
+
+    var label: String {
+        switch self {
+        case .bank: return "Follow the bank's Multiplay"
+        case .over: return "Play over everything"
+        case .solo: return "Solo: fade out the bank's other pads"
+        }
+    }
+}
+
+enum FireActionKind: String, Codable, CaseIterable {
+    case stopOthers = "stop_others"
+    case firePad = "fire_pad"
+    case stopPad = "stop_pad"
+    case duck
+    case bank
+
+    var label: String {
+        switch self {
+        case .stopOthers: return "Stop other pads"
+        case .firePad: return "Fire a pad"
+        case .stopPad: return "Stop a pad"
+        case .duck: return "Duck everything else"
+        case .bank: return "Switch to bank"
+        }
+    }
+}
+
+/// One action a pad runs when it starts (the show file's `on_fire`).
+struct FireAction: Codable, Equatable, Identifiable {
+    var kind: FireActionKind
+    var pad: Int?
+    var seconds: Double?
+    var db: Double?
+    var bank: Int?
+    /// Stop other pads: only this bank's.
+    var thisBank: Bool?
+    /// For SwiftUI lists only (not saved).
+    var id = UUID()
+
+    enum CodingKeys: String, CodingKey {
+        case kind, pad, seconds, db, bank
+        case thisBank = "this_bank"
+    }
+
+    init(kind: FireActionKind) {
+        self.kind = kind
+        switch kind {
+        case .stopOthers: seconds = 1
+        case .duck:
+            db = -12
+            seconds = 5
+        default: break
+        }
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        kind = try c.decode(FireActionKind.self, forKey: .kind)
+        pad = try c.decodeIfPresent(Int.self, forKey: .pad)
+        seconds = try c.decodeIfPresent(Double.self, forKey: .seconds)
+        db = try c.decodeIfPresent(Double.self, forKey: .db)
+        bank = try c.decodeIfPresent(Int.self, forKey: .bank)
+        thisBank = try c.decodeIfPresent(Bool.self, forKey: .thisBank)
+    }
+
+    static func == (a: FireAction, b: FireAction) -> Bool {
+        a.kind == b.kind && a.pad == b.pad && a.seconds == b.seconds && a.db == b.db
+            && a.bank == b.bank && (a.thisBank ?? false) == (b.thisBank ?? false)
+    }
+
+    /// e.g. "Fire \"Horn\" after 2 s".
+    func describe(in show: ShowDoc) -> String {
+        let padName = pad.map { slot -> String in
+            guard let cue = show.cue(at: slot) else { return "an empty pad" }
+            return cue.title.isEmpty ? "pad \(slot % max(show.slots, 1) + 1)" : "\"\(cue.title)\""
+        } ?? "(no pad)"
+        switch kind {
+        case .stopOthers:
+            let scope = thisBank == true ? "this bank's other pads" : "all other pads"
+            return "Stop \(scope)" + (seconds.map { $0 > 0 ? String(format: " over %.1f s", $0) : " at once" } ?? "")
+        case .firePad:
+            let delay = (seconds ?? 0) > 0 ? String(format: " after %.1f s", seconds ?? 0) : ""
+            return "Fire \(padName)\(delay)"
+        case .stopPad:
+            return "Stop \(padName)" + (seconds.map { String(format: " over %.1f s", $0) } ?? "")
+        case .duck:
+            return String(format: "Duck everything else %.0f dB for %.1f s", db ?? -12, seconds ?? 5)
+        case .bank:
+            let index = bank ?? 0
+            let name = show.banks.indices.contains(index) ? show.banks[index] : "bank \(index + 1)"
+            return "Switch to \(name)"
+        }
     }
 }
 
@@ -283,6 +407,13 @@ struct CueDoc: Codable, Equatable {
     var sponsor: String?
     /// Follows the show's level matching (when it is on).
     var levelMatch = true
+    /// How the pad treats its bank's Multiplay setting.
+    var playMode: PlayMode = .bank
+    /// Actions run, in order, each time the pad starts.
+    var onFire: [FireAction] = []
+
+    /// Has a play mode or actions worth flagging on the pad.
+    var hasActions: Bool { playMode != .bank || !onFire.isEmpty }
 
     enum CodingKeys: String, CodingKey {
         case slot, title, hotkey, output, gain, loop, color, image, clips, markers, midi
@@ -290,6 +421,8 @@ struct CueDoc: Codable, Equatable {
         case fadeIn = "fade_in"
         case fadeOut = "fade_out"
         case levelMatch = "level_match"
+        case playMode = "play_mode"
+        case onFire = "on_fire"
     }
 
     var fadeOutSeconds: Double { fadeOut ?? 0.5 }
@@ -326,6 +459,8 @@ struct CueDoc: Codable, Equatable {
         playlist = try c.decodeIfPresent(PlaylistDoc.self, forKey: .playlist)
         sponsor = try c.decodeIfPresent(String.self, forKey: .sponsor)
         levelMatch = try c.value(.levelMatch, or: true)
+        playMode = try c.value(.playMode, or: .bank)
+        onFire = try c.value(.onFire, or: [])
     }
 
     /// A playlist pad of the given files.
@@ -556,6 +691,8 @@ struct SessionStatus: Decodable, Equatable {
     var last: Int?
     /// Banks with Multiplay off.
     var singlePlay: [Int]
+    /// Pads marked as played this game.
+    var played: [Int]
     var previewOutput: Int?
     var preview: PreviewInfo?
     var bank: Int

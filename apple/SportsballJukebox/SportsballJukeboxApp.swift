@@ -31,6 +31,9 @@ struct SportsballJukeboxApp: App {
                 Button("Control (MIDI, OSC, Remote)…") { model.showingControls = true }
                     .keyboardShortcut("m", modifiers: [.command, .shift])
                 Button("Show Settings…") { model.showingSettings = true }
+                Button("Colour Presets…") { model.showingColours = true }
+                Button("Reset Played on This Page") { model.resetPlayed(bank: model.currentBank) }
+                Button("Reset Played on All Pages") { model.resetPlayed(bank: nil) }
                 Button(model.showingLibrary ? "Hide Library" : "Show Library") {
                     model.showingLibrary.toggle()
                 }
@@ -60,6 +63,8 @@ struct SportsballJukeboxApp: App {
                     .keyboardShortcut("-", modifiers: [.command])
                 Button("Game Log…") { model.showingLog = true }
                     .keyboardShortcut("l", modifiers: [.command, .shift])
+                Button("Event Log…") { model.showingEvents = true }
+                    .keyboardShortcut("e", modifiers: [.command, .shift])
                 Button("Pre-game Check…") {
                     model.runPreflight()
                     model.showingPreflight = true

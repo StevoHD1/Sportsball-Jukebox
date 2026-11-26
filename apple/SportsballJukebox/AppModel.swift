@@ -47,6 +47,7 @@ final class AppModel: ObservableObject {
     @Published var showingControls = false
     @Published var showingPreflight = false
     @Published var showingLog = false
+    @Published var showingEvents = false
     @Published var showingRundown: Bool = UserDefaults.standard.bool(forKey: "showRundown") {
         didSet {
             UserDefaults.standard.set(showingRundown, forKey: "showRundown")
@@ -364,12 +365,12 @@ final class AppModel: ObservableObject {
 
     func applySettings(
         name: String, slots: Int, columns: Int, banks: [String], stopAllFade: Double,
-        levelMatch: Double?
+        levelMatch: Double?, playedColor: String?, markPlayed: Bool
     ) {
         report {
             try session.setShowSettings(
                 name: name, slots: slots, columns: columns, banks: banks, stopAllFade: stopAllFade,
-                levelMatch: levelMatch
+                levelMatch: levelMatch, playedColor: playedColor, markPlayed: markPlayed
             )
         }
         // The gain level matching would apply depends on the target.
@@ -493,6 +494,59 @@ final class AppModel: ObservableObject {
                 self.refreshShow()
             }
         }
+    }
+
+    // MARK: - Played marks
+
+    func isPlayed(_ slot: Int) -> Bool {
+        status?.played.contains(slot) ?? false
+    }
+
+    func setPlayed(_ slot: Int, _ played: Bool) {
+        session.setPlayed(slot: slot, played)
+        refreshStatus()
+    }
+
+    /// The bank shown, or (nil) every bank.
+    func resetPlayed(bank: Int?) {
+        session.resetPlayed(bank: bank)
+        refreshStatus()
+    }
+
+    /// Played pads on the bank shown.
+    var playedOnThisBank: Int {
+        let range = show.padRange(bank: currentBank)
+        return (status?.played ?? []).filter { range.contains($0) }.count
+    }
+
+    // MARK: - Colour presets
+
+    @Published var showingColours = false
+
+    /// Replaces the show's colour presets; with `recolor`, pads using a
+    /// preset whose colour changed follow it.
+    func setShowColors(_ colors: [ShowColor], recolor: Bool) {
+        report { try session.setShowColors(colors, recolor: recolor) }
+        refreshShow(undo: "Colour Presets")
+    }
+
+    /// Asks for a name and saves `value` ("#RRGGBB") as a preset.
+    func saveColourPreset(_ value: String) {
+        let alert = NSAlert()
+        alert.messageText = "Save Colour Preset"
+        alert.informativeText = "The preset is saved with the show, so it's there on any Mac."
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
+        field.placeholderString = "e.g. Home red"
+        alert.accessoryView = field
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let name = field.stringValue.trimmingCharacters(in: .whitespaces)
+        guard !name.isEmpty else { return }
+        var colors = show.colors.filter { $0.name != name }
+        colors.append(ShowColor(name: name, value: value))
+        setShowColors(colors, recolor: false)
     }
 
     // MARK: - Live transport
@@ -740,6 +794,63 @@ final class AppModel: ObservableObject {
 
     func clearLog() {
         session.clearLog()
+    }
+
+    // MARK: - Event log
+
+    func events() -> [EventEntry] {
+        session.events()
+    }
+
+    func resetGlitches() {
+        session.resetGlitches()
+        refreshStatus()
+    }
+
+    /// Plain text for a bug report: this Mac, the app, the devices and
+    /// outputs, and recent events.
+    func diagnosticsReport(events: [EventEntry]) -> String {
+        var size = 0
+        sysctlbyname("hw.model", nil, &size, nil, 0)
+        var hwModel = [CChar](repeating: 0, count: max(size, 1))
+        sysctlbyname("hw.model", &hwModel, &size, nil, 0)
+        let mac = String(decoding: hwModel.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
+        let info = Bundle.main.infoDictionary ?? [:]
+        let version = info["CFBundleShortVersionString"] as? String ?? "?"
+        let build = info["CFBundleVersion"] as? String ?? "?"
+        let process = ProcessInfo.processInfo
+
+        var lines = [
+            "Sportsball Jukebox \(version) (\(build))",
+            "Mac: \(mac), \(process.processorCount) cores, \(process.physicalMemory / 1_073_741_824) GB",
+            "macOS: \(process.operatingSystemVersionString)",
+            "Show: \(show.name), \(show.cues.count) pads",
+            "",
+            "Outputs:",
+        ]
+        for output in status?.outputs ?? [] {
+            var line = "  \(output.name): \(output.status)"
+            if let device = output.deviceName {
+                line += ", \(device) at \(output.sampleRate) Hz, \(output.channels) ch"
+            }
+            line += ", \(output.xruns) glitches"
+            if let error = output.error { line += ", error: \(error)" }
+            lines.append(line)
+        }
+        lines.append("")
+        lines.append("Devices:")
+        for device in devices {
+            lines.append(
+                "  \(device.name)\(device.isDefault ? " (default)" : ""): \(device.channels) ch, \(device.sampleRate) Hz"
+            )
+        }
+        lines.append("")
+        lines.append("Recent events (UTC):")
+        let formatter = ISO8601DateFormatter()
+        for event in events.suffix(100) {
+            lines.append("  \(formatter.string(from: event.date)) [\(event.level)] \(event.message)")
+        }
+        return lines.joined(separator: "\n")
     }
 
     func openLogFolder() {

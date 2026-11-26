@@ -289,6 +289,41 @@ built-in speakers or headphones)
       that folder to a USB stick or another Mac and open the show there:
       every pad, picture and library file is found.
 
+**Phase 15: pad actions**
+- [ ] Turn Multiplay off for a bank. Open a horn pad's editor →
+      Actions… → Play mode "Play over everything". Fire the music, then
+      the horn: the music keeps playing. Fire another pad: the music hands
+      over, the horn carries on. The horn shows ⚡ and its tooltip says why.
+- [ ] Set a pad to "Solo" in a Multiplay bank: firing it fades out the
+      bank's other pads.
+- [ ] Add actions to a pad: Stop other pads; Fire a pad after 2 s; Duck
+      everything else -15 dB for 4 s; Switch to bank. Fire it from a key,
+      MIDI and the rundown: each time all of them happen, in order.
+- [ ] Make two pads fire each other: firing one doesn't hang the app.
+- [ ] Pad editor → Colour menu → Save This Colour as a Preset…: it's
+      listed under Show colours on every pad, and in Show Settings → New
+      pads. Show → Colour Presets…: change its colour with "Recolour pads"
+      on: every pad using it changes. Save, open the show on another Mac:
+      the presets are there.
+- [ ] A custom-coloured pad looks the same colour as its swatch in the
+      Colour menu (not darker). A playing pad keeps its colour with a white
+      border.
+- [ ] Show Settings → Played pads: turn on "Show played pads in" with a
+      colour. Fire pads: when they finish they show that colour and a ✓.
+      Right-click → Unmark as Played / Mark as Played. "Reset Played" on
+      the bank bar clears the page; Show → Reset Played on All Pages clears
+      everything. The phone remote shows played pads too.
+- [ ] Show → Event Log… (⇧⌘E): it lists the outputs opening on their
+      devices. Unplug the output device: the loss and the switch to the
+      backup appear with times. Clicking an output's status in the header
+      opens the log too.
+- [ ] Event Log → Copy Diagnostics, paste into a text editor: it shows
+      the Mac model, macOS version, app version, outputs, devices and
+      recent events. Open Log Folder shows an `events-…jsonl` file.
+- [ ] If the header ever shows glitches, the Event Log says when, on
+      which output and what was playing. Reset Glitch Count clears the
+      header but keeps the entries.
+
 **Stress**
 - [ ] Leave a looping cue running for 10+ minutes. The status line should
       not start showing "glitches".

@@ -570,6 +570,7 @@ pub unsafe extern "C" fn sbj_session_status_json(session: *const SbjSession) -> 
                 "preview": preview,
                 "bank": session.current_bank(),
                 "standby": session.standby(),
+                "played": session.played(),
                 "undo": session.undo_label(),
                 "redo": session.redo_label(),
                 "last": session.last_playing(),
@@ -786,6 +787,11 @@ pub unsafe extern "C" fn sbj_session_set_show_settings_json(
         /// Absent: unchanged; null: off; a number: target LUFS.
         #[serde(default)]
         level_match: Option<serde_json::Value>,
+        /// Absent: unchanged; null: off; a string: colour of played pads.
+        #[serde(default)]
+        played_color: Option<serde_json::Value>,
+        #[serde(default)]
+        mark_played: Option<bool>,
     }
     // SAFETY: forwarded caller contract.
     let settings: Settings = match unsafe { required_str(json, "json") }.and_then(|j| {
@@ -804,6 +810,14 @@ pub unsafe extern "C" fn sbj_session_set_show_settings_json(
             }
             if let Some(level) = &settings.level_match {
                 session.set_level_match(level.as_f64());
+            }
+            if settings.played_color.is_some() || settings.mark_played.is_some() {
+                let color = match &settings.played_color {
+                    Some(value) => value.as_str().map(str::to_owned),
+                    None => session.show().played_color.clone(),
+                };
+                let mark = settings.mark_played.unwrap_or(session.show().mark_played);
+                session.set_played_style(color, mark);
             }
             session_status(session.set_show_settings(
                 &settings.name,
@@ -944,6 +958,77 @@ pub unsafe extern "C" fn sbj_session_step_standby(
     }
 }
 
+/// Marks (`played`) or unmarks a pad as played (status JSON "played").
+///
+/// # Safety
+/// `session` must be null or a live session.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sbj_session_set_played(
+    session: *const SbjSession,
+    slot: u32,
+    played: bool,
+) -> SbjStatus {
+    // SAFETY: forwarded caller contract.
+    unsafe {
+        with_session(session, |s| {
+            s.lock().set_played(slot, played);
+            SbjStatus::Ok
+        })
+    }
+}
+
+/// Unmarks every pad in `bank` (0-based) as played; negative = all banks.
+///
+/// # Safety
+/// `session` must be null or a live session.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sbj_session_reset_played(
+    session: *const SbjSession,
+    bank: i32,
+) -> SbjStatus {
+    // SAFETY: forwarded caller contract.
+    unsafe {
+        with_session(session, |s| {
+            s.lock().reset_played(u32::try_from(bank).ok());
+            SbjStatus::Ok
+        })
+    }
+}
+
+/// The event log as JSON, oldest first: `[{"time": unix seconds,
+/// "level": "info"|"warning"|"error", "kind": string, "message": string}]`
+/// (glitches with what was playing, device changes, failed fires,
+/// warnings). Null on failure. Free with `sbj_string_free`.
+///
+/// # Safety
+/// `session` must be null or a live session.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sbj_session_events_json(session: *const SbjSession) -> *mut c_char {
+    // SAFETY: forwarded caller contract.
+    unsafe {
+        session_string(session, |s| {
+            let session = s.lock();
+            Ok(serde_json::to_string(session.events()).unwrap_or_else(|_| "[]".into()))
+        })
+    }
+}
+
+/// Starts every output's glitch count again from zero (the event log
+/// keeps the history).
+///
+/// # Safety
+/// `session` must be null or a live session.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sbj_session_reset_glitches(session: *const SbjSession) -> SbjStatus {
+    // SAFETY: forwarded caller contract.
+    unsafe {
+        with_session(session, |s| {
+            s.lock().reset_glitches();
+            SbjStatus::Ok
+        })
+    }
+}
+
 /// Moves the preview's playhead to `seconds`, playing it again if it had
 /// stopped (the preview player's scrub bar).
 ///
@@ -1021,6 +1106,36 @@ pub unsafe extern "C" fn sbj_session_set_pad_defaults_json(
     unsafe {
         with_session(session, |s| {
             s.lock().set_pad_defaults(defaults);
+            SbjStatus::Ok
+        })
+    }
+}
+
+/// Replaces the show's colour presets with a JSON array
+/// `[{"name", "value": "#RRGGBB"}]`. With `recolor`, pads using a preset
+/// whose colour changed (matched by name) take the new colour.
+///
+/// # Safety
+/// `session` must be null or a live session; `json` a valid string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sbj_session_set_show_colors_json(
+    session: *const SbjSession,
+    json: *const c_char,
+    recolor: bool,
+) -> SbjStatus {
+    // SAFETY: forwarded caller contract.
+    let colors: Vec<sbj_session::ShowColor> =
+        match unsafe { required_str(json, "json") }.and_then(|j| {
+            serde_json::from_str(j)
+                .map_err(|e| fail(SbjStatus::InvalidArgument, format!("bad colours: {e}")))
+        }) {
+            Ok(c) => c,
+            Err(status) => return status,
+        };
+    // SAFETY: forwarded caller contract.
+    unsafe {
+        with_session(session, |s| {
+            s.lock().set_show_colors(colors, recolor);
             SbjStatus::Ok
         })
     }

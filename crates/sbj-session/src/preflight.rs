@@ -185,6 +185,24 @@ impl<B: AudioBackend> Session<B> {
             );
         }
 
+        // Pad actions that fire or stop an empty pad.
+        for cue in &self.show.cues {
+            if cue
+                .on_fire
+                .iter()
+                .filter_map(|a| a.target_pad())
+                .any(|pad| self.show.cue(pad).is_none())
+            {
+                add(
+                    CheckLevel::Warning,
+                    format!(
+                        "{}: an action fires or stops an empty pad.",
+                        pad_name(cue.slot)
+                    ),
+                );
+            }
+        }
+
         // Rundown steps whose pad is empty.
         for (i, item) in self.show.rundown.iter().enumerate() {
             if let Some(pad) = item.pad
