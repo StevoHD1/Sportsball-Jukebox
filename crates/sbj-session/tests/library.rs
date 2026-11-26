@@ -172,3 +172,162 @@ fn colour_presets_are_kept_and_can_recolour_pads() {
     let back = Show::from_json(&s.show().to_json()).unwrap();
     assert_eq!(back.colors, [preset("Home red", "#BB0000")]);
 }
+
+fn arena_and_headphones(s: &mut sbj_session::Session<sbj_backend::offline::OfflineBackend>) {
+    s.set_outputs(vec![
+        OutputDoc::named("Arena"),
+        OutputDoc {
+            name: "Headphones".into(),
+            device: Some(DeviceRef {
+                id: B.into(),
+                name: String::new(),
+            }),
+            backup: None,
+        },
+    ])
+    .unwrap();
+}
+
+#[test]
+fn the_library_player_pauses_resumes_and_can_play_through_another_output() {
+    let backend = two_devices();
+    let mut s = session(&backend);
+    arena_and_headphones(&mut s);
+    s.add_sound("song.wav".into(), ramp(48_000));
+    s.set_preview_output(Some(1)).unwrap();
+
+    s.preview_file("song.wav").unwrap();
+    pull(&mut s, 1, 1_000);
+    s.pause_preview().unwrap();
+    pull(&mut s, 1, 64); // takes effect on the next block
+    let state = s.preview_state().unwrap();
+    assert!(state.paused && !state.playing);
+    let at = state.position_seconds;
+    pull(&mut s, 1, 1_000);
+    assert!(
+        pull(&mut s, 1, 100).iter().all(|&x| x == 0.0),
+        "silent while paused"
+    );
+    s.resume_preview().unwrap();
+    pull(&mut s, 1, 1);
+    let state = s.preview_state().unwrap();
+    assert!(state.playing && !state.paused);
+    assert!(
+        (state.position_seconds - at).abs() < 0.01,
+        "carries on from where it was"
+    );
+    assert!(pull(&mut s, 1, 100)[50] > 0.0);
+
+    // Through the arena instead.
+    s.set_library_output(Some(0)).unwrap();
+    assert!(s.preview_state().is_none(), "changing output stops it");
+    s.preview_file("song.wav").unwrap();
+    assert!(pull(&mut s, 0, 100)[50] > 0.0, "on the arena");
+    assert!(
+        pull(&mut s, 1, 100).iter().all(|&x| x == 0.0),
+        "not in the headphones"
+    );
+    assert!(s.set_library_output(Some(7)).is_err());
+
+    // Saved with the show; removing the output resets it.
+    let back = Show::from_json(&s.show().to_json()).unwrap();
+    assert_eq!(back.library_output, Some(0));
+    s.set_library_output(Some(1)).unwrap();
+    s.set_outputs(vec![OutputDoc::named("Arena")]).unwrap();
+    assert_eq!(s.show().library_output, None);
+
+    // With no preview output, a chosen library output still plays.
+    s.set_library_output(Some(0)).unwrap();
+    assert_eq!(s.show().preview_output, None);
+    s.preview_file("song.wav").unwrap();
+}
+
+#[test]
+fn page_defaults_override_the_shows() {
+    let backend = two_devices();
+    let mut s = session(&backend);
+    s.set_show_settings("T", 4, 4, vec!["One".into(), "Two".into()])
+        .unwrap();
+    s.add_sound("a".into(), constant(0.5, 48_000));
+    for slot in [0, 1, 4] {
+        s.set_cue(CueDoc::simple(slot, "Pad", "a")).unwrap();
+    }
+    let show = PadDefaults {
+        color: Some("#112233".into()),
+        fade_in: 0.5,
+        ..PadDefaults::default()
+    };
+    let page_two = PadDefaults {
+        color: Some("#445566".into()),
+        looping: true,
+        ..PadDefaults::default()
+    };
+    s.set_pad_defaults(Some(show.clone()));
+    s.set_bank_defaults(1, Some(page_two.clone())).unwrap();
+    assert!(s.set_bank_defaults(5, None).is_err());
+    assert_eq!(s.effective_pad_defaults(0), show);
+    assert_eq!(s.effective_pad_defaults(1), page_two);
+
+    // Saved; dropping the page drops its defaults.
+    let back = Show::from_json(&s.show().to_json()).unwrap();
+    assert_eq!(back.bank_defaults.len(), 1);
+    s.set_bank_defaults(1, None).unwrap();
+    assert_eq!(s.effective_pad_defaults(1), show);
+    s.set_bank_defaults(1, Some(page_two)).unwrap();
+    s.remove_cue(4).unwrap();
+    s.set_show_settings("T", 4, 4, vec!["One".into()]).unwrap();
+    assert!(s.show().bank_defaults.is_empty());
+}
+
+#[test]
+fn bulk_edits_change_only_the_chosen_settings() {
+    use sbj_session::{PadChanges, PlayMode, Retrigger};
+    let backend = two_devices();
+    let mut s = session(&backend);
+    s.set_show_settings("T", 4, 4, vec!["One".into(), "Two".into()])
+        .unwrap();
+    s.add_sound("a".into(), constant(0.5, 48_000));
+    for slot in [0, 1, 4] {
+        let mut cue = CueDoc::simple(slot, "Pad", "a");
+        cue.color = Some("#112233".into());
+        cue.group = Some("Music".into());
+        cue.fade_in = 0.25;
+        s.set_cue(cue).unwrap();
+    }
+
+    // Bank two only: fade-out 2 s; nothing else moves.
+    let fade = PadChanges {
+        fade_out: Some(Some(2.0)),
+        ..PadChanges::default()
+    };
+    assert_eq!(s.bulk_edit(Some(1), &fade).unwrap(), 1);
+    let four = s.show().cue(4).unwrap();
+    assert_eq!(four.fade_out, Some(2.0));
+    assert_eq!(four.color.as_deref(), Some("#112233"));
+    assert!((four.fade_in - 0.25).abs() < 1e-9);
+    assert_eq!(s.show().cue(0).unwrap().fade_out, None);
+    assert_eq!(s.bulk_edit(Some(1), &fade).unwrap(), 0, "already so");
+
+    // The whole show, from JSON as the app sends it: null clears.
+    let json = r#"{"color": null, "group": null, "loop": true, "retrigger": "fade", "play_mode": "over", "gain": 0.5}"#;
+    let changes: PadChanges = serde_json::from_str(json).unwrap();
+    assert_eq!(changes.color, Some(None));
+    assert_eq!(changes.fade_out, None, "left out = unchanged");
+    assert_eq!(s.bulk_edit(None, &changes).unwrap(), 3);
+    for cue in &s.show().cues {
+        assert_eq!(cue.color, None);
+        assert_eq!(cue.group, None);
+        assert!(cue.looping);
+        assert_eq!(cue.retrigger, Retrigger::Fade);
+        assert_eq!(cue.play_mode, PlayMode::Over);
+        assert!((cue.gain - 0.5).abs() < 1e-6);
+    }
+    assert_eq!(s.show().cue(4).unwrap().fade_out, Some(2.0));
+
+    // A missing output is refused, changing nothing.
+    let bad = PadChanges {
+        output: Some(9),
+        ..PadChanges::default()
+    };
+    assert!(s.bulk_edit(None, &bad).is_err());
+}

@@ -25,6 +25,8 @@ fn watching(dir: &Path, subfolders: bool) -> (OfflineBackend, Session<OfflineBac
     s.set_watch_folders(vec![WatchFolder {
         path: dir.display().to_string(),
         subfolders,
+        download: true,
+        types: vec![],
     }]);
     (backend, s)
 }
@@ -166,14 +168,20 @@ fn watch_folders_are_saved_with_the_show() {
         WatchFolder {
             path: "/tmp/clips/".into(),
             subfolders: false,
+            download: true,
+            types: vec![],
         },
         WatchFolder {
             path: "/tmp/clips".into(),
             subfolders: true,
+            download: true,
+            types: vec![],
         },
         WatchFolder {
             path: "  ".into(),
             subfolders: true,
+            download: true,
+            types: vec![],
         },
     ]);
     assert_eq!(s.watch_folders().len(), 1);
@@ -200,4 +208,110 @@ fn the_pregame_check_warns_about_missing_watch_folders() {
             .any(|c| c.message.contains("/nonexistent/sbj/clips")),
         "{checks:?}"
     );
+}
+
+fn cloud_placeholder(path: &Path) -> bool {
+    path.file_name()
+        .is_some_and(|n| n.to_string_lossy().starts_with("cloud-"))
+}
+
+#[test]
+fn online_only_files_are_downloaded_in_the_background() {
+    let dir = temp("cloud");
+    let (_b, mut s) = watching(&dir, true);
+    s.set_online_only_probe(cloud_placeholder);
+    write_wav(&dir.join("cloud-Horn.wav"), 48_000, 100, 1000);
+    write_wav(&dir.join("Local.wav"), 48_000, 100, 1000);
+    let before = s.download_changes();
+    s.poll();
+    assert!(s.download_changes() > before, "a download started");
+    let file = dir.join("cloud-Horn.wav").display().to_string();
+    // Wait for the background read to finish.
+    for _ in 0..200 {
+        s.poll();
+        if s.events()
+            .iter()
+            .any(|e| e.message.starts_with("Downloaded"))
+        {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(!s.is_downloading(&file));
+    let messages: Vec<&str> = s.events().iter().map(|e| e.message.as_str()).collect();
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.contains("Downloaded \"cloud-Horn.wav\"")),
+        "{messages:?}"
+    );
+    assert!(
+        !messages
+            .iter()
+            .any(|m| m.contains("Local.wav") && m.contains("Download"))
+    );
+    let entry = s
+        .library_entries()
+        .into_iter()
+        .find(|e| e.file == file)
+        .unwrap();
+    // The probe here never clears, as Box's flag would.
+    assert!(entry.online_only);
+
+    // By hand, and errors for missing files.
+    s.download_file(&file).unwrap();
+    assert!(s.download_file("/nonexistent/x.wav").is_err());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn downloading_can_be_turned_off_per_folder() {
+    let dir = temp("cloud-off");
+    let (_b, mut s) = watching(&dir, true);
+    s.set_online_only_probe(cloud_placeholder);
+    s.set_watch_folders(vec![WatchFolder {
+        path: dir.display().to_string(),
+        subfolders: true,
+        download: false,
+        types: vec![],
+    }]);
+    write_wav(&dir.join("cloud-Horn.wav"), 48_000, 100, 1000);
+    let before = s.download_changes();
+    s.poll();
+    s.poll();
+    assert_eq!(s.download_changes(), before);
+    assert_eq!(library(&s), ["cloud-Horn.wav"], "still imported");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn folders_pick_up_only_the_chosen_file_types() {
+    let dir = temp("types");
+    let (_b, mut s) = watching(&dir, true);
+    for name in ["Horn.wav", "Song.mp3", "Clip.mp4", "Notes.txt", "Video.mov"] {
+        write_wav(&dir.join(name), 48_000, 100, 1000);
+    }
+    s.poll();
+    s.poll();
+    // By default: audio, but not MP4 (usually video), text or video.
+    assert_eq!(library(&s), ["Horn.wav", "Song.mp3"]);
+
+    let dir2 = temp("types-chosen");
+    let (_b2, mut s2) = watching(&dir2, true);
+    s2.set_watch_folders(vec![WatchFolder {
+        path: dir2.display().to_string(),
+        subfolders: true,
+        download: true,
+        types: vec![".MP4".into(), "wav".into(), "txt".into(), "wav".into()],
+    }]);
+    // Cleaned up: lower case, no dots, no repeats, audio types only.
+    assert_eq!(s2.watch_folders()[0].types, ["mp4", "wav"]);
+    for name in ["Horn.wav", "Song.mp3", "Clip.mp4", "Notes.txt"] {
+        write_wav(&dir2.join(name), 48_000, 100, 1000);
+    }
+    s2.poll();
+    s2.poll();
+    assert_eq!(library(&s2), ["Clip.mp4", "Horn.wav"]);
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&dir2);
 }

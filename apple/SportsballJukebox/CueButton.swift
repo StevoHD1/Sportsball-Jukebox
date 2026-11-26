@@ -123,8 +123,19 @@ struct CueButton: View {
                 // A picture dropped on a pad becomes its picture.
                 model.setImage(url, for: slot)
             } else if url.isFileURL {
-                // Several files make a playlist pad.
-                model.assignSounds(urls: urls.filter(\.isFileURL), to: slot)
+                let files = urls.filter(\.isFileURL)
+                if NSEvent.modifierFlags.contains(.option) {
+                    // ⌥: several files make one playlist pad.
+                    model.assignSounds(urls: model.audioFiles(in: files), to: slot)
+                } else if files.count > 1 || files.contains(where: { url in
+                    var isFolder: ObjCBool = false
+                    return FileManager.default.fileExists(atPath: url.path, isDirectory: &isFolder) && isFolder.boolValue
+                }) {
+                    // A pad per file, filling the bank's empty pads from here.
+                    model.addPads(urls: files, bank: slot / max(model.show.slots, 1), startingAt: slot)
+                } else {
+                    model.assignSound(url: url, to: slot)
+                }
             } else {
                 return false
             }

@@ -225,6 +225,7 @@ final class AppModel: ObservableObject {
         let finishedLearning = status?.learning != nil && current.learning == nil
         // So did files arriving in a watch folder.
         let imported = status.map { $0.watchImports != current.watchImports } ?? false
+        let downloaded = status.map { $0.downloads != current.downloads } ?? false
         if current != status {
             status = current
         }
@@ -232,6 +233,9 @@ final class AppModel: ObservableObject {
             refreshShow(undo: "Import from Watch Folder")
         } else if finishedLearning {
             refreshShow()
+        } else if downloaded {
+            let entries = session.library()
+            if entries != library { library = entries }
         }
     }
 
@@ -956,15 +960,201 @@ final class AppModel: ObservableObject {
         if cue.hotkey == nil {
             cue.hotkey = freeHotkey(preferring: slot)
         }
-        let trim = isNew ? (show.padDefaults?.trimSilence ?? true) : true
+        let trim = isNew ? show.defaults(forBank: slot / max(show.slots, 1)).trimSilence : true
         updateCue(cue, trimLeadingSilence: trim, undo: "Assign Sound")
     }
 
-    /// An empty pad with the show's defaults for new pads.
+    /// An empty pad with its bank's (or the show's) settings for new pads.
     private func newPad(slot: Int) -> CueDoc {
         var cue = CueDoc(slot: slot)
-        show.padDefaults?.apply(to: &cue, outputs: show.outputs.count)
+        show.defaults(forBank: slot / max(show.slots, 1)).apply(to: &cue, outputs: show.outputs.count)
         return cue
+    }
+
+    // MARK: - Several files at once
+
+    /// Audio files among `urls`, with folders expanded (sorted by name
+    /// within each folder).
+    func audioFiles(in urls: [URL]) -> [URL] {
+        var files: [URL] = []
+        for url in urls {
+            var isFolder: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isFolder) else { continue }
+            if isFolder.boolValue {
+                var found: [URL] = []
+                let walker = FileManager.default.enumerator(
+                    at: url, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]
+                )
+                while let item = walker?.nextObject() as? URL {
+                    if Self.audioExtensions.contains(item.pathExtension.lowercased()) {
+                        found.append(item)
+                    }
+                }
+                files += found.sorted {
+                    $0.path.localizedStandardCompare($1.path) == .orderedAscending
+                }
+            } else if Self.audioExtensions.contains(url.pathExtension.lowercased()) {
+                files.append(url)
+            }
+        }
+        return files
+    }
+
+    /// One new pad per file on `bank`'s empty pads, from `start` (else
+    /// the first empty pad). If they don't all fit, asks whether to add
+    /// banks for the rest or skip them. One undo step.
+    func addPads(urls: [URL], bank: Int, startingAt start: Int? = nil) {
+        var files = audioFiles(in: urls)
+        guard !files.isEmpty else {
+            alert = AlertMessage(title: "No audio files", message: "Nothing to add: drop audio files or folders of them.")
+            return
+        }
+        let perBank = max(show.slots, 1)
+        let range = show.padRange(bank: bank)
+        let empty = range.filter { show.cue(at: $0) == nil }
+        var slots = empty
+        if let start, range.contains(start) {
+            slots = empty.filter { $0 >= start } + empty.filter { $0 < start }
+        }
+        var newBanks: [String] = []
+        if files.count > slots.count {
+            let extra = files.count - slots.count
+            let pages = (extra + perBank - 1) / perBank
+            let bankName = show.banks.indices.contains(bank) ? show.banks[bank] : "this bank"
+            let confirm = NSAlert()
+            confirm.messageText = "\(files.count) files, but \"\(bankName)\" has \(slots.count) empty pad\(slots.count == 1 ? "" : "s")"
+            confirm.informativeText = "What should happen to the other \(extra) file\(extra == 1 ? "" : "s")?"
+            confirm.addButton(withTitle: pages == 1 ? "Add a Bank for Them" : "Add \(pages) Banks for Them")
+            confirm.addButton(withTitle: slots.isEmpty ? "Skip Them" : "Skip Them (Add \(slots.count))")
+            confirm.addButton(withTitle: "Cancel")
+            switch confirm.runModal() {
+            case .alertFirstButtonReturn:
+                let total = show.banks.count + pages
+                guard total * perBank <= 512 else {
+                    alert = AlertMessage(
+                        title: "Too many pads",
+                        message: "A show holds at most 512 pads; \(pages) more bank\(pages == 1 ? "" : "s") of \(perBank) won't fit. Use fewer files or smaller banks."
+                    )
+                    return
+                }
+                for page in 0..<pages {
+                    let index = show.banks.count + page
+                    newBanks.append("Bank \(index + 1)")
+                    slots += Array(show.padRange(bank: index))
+                }
+            case .alertSecondButtonReturn:
+                files = Array(files.prefix(slots.count))
+                guard !files.isEmpty else { return }
+            default:
+                return
+            }
+        }
+
+        var taken: [Int: Set<String>] = [:]
+        var cues: [CueDoc] = []
+        for (url, slot) in zip(files, slots) {
+            var cue = newPad(slot: slot)
+            cue.title = url.deletingPathExtension().lastPathComponent
+            cue.clips = [ClipDoc(file: url.path)]
+            let padBank = slot / perBank
+            cue.hotkey = freeHotkey(preferring: slot, alsoTaken: taken[padBank] ?? [])
+            if let key = cue.hotkey {
+                taken[padBank, default: []].insert(key)
+            }
+            cues.append(cue)
+        }
+        let trims = cues.map { show.defaults(forBank: $0.slot / perBank).trimSilence }
+        let pads = cues
+        let addedBanks = newBanks
+        let settings = show
+        let session = self.session
+        let minimumTrim = Self.minimumTrimSeconds
+        busySlots.formUnion(pads.map(\.slot))
+        Task.detached(priority: .userInitiated) {
+            var failures: [String] = []
+            var infos: [(String, SoundInfo)] = []
+            if !addedBanks.isEmpty {
+                do {
+                    try session.setShowSettings(
+                        name: settings.name, slots: settings.slots, columns: settings.columns,
+                        banks: settings.banks + addedBanks, stopAllFade: settings.stopAllFade,
+                        levelMatch: settings.levelMatch, playedColor: settings.playedColor,
+                        markPlayed: settings.markPlayed
+                    )
+                } catch {
+                    failures.append(error.localizedDescription)
+                }
+            }
+            for (index, original) in pads.enumerated() {
+                var cue = original
+                do {
+                    if trims[index], let file = cue.clips.first?.file {
+                        _ = try session.loadSound(file: file)
+                        if let measured = session.soundInfo(file: file) {
+                            infos.append((file, measured))
+                            if measured.leadSilence >= minimumTrim, measured.leadSilence < measured.duration {
+                                cue.clips[0].offset = measured.leadSilence
+                            }
+                        }
+                    }
+                    try session.setCue(cue)
+                } catch {
+                    failures.append("\(cue.title): \(error.localizedDescription)")
+                }
+            }
+            let problems = failures
+            let measured = infos
+            let count = pads.count - problems.count
+            await MainActor.run {
+                for (file, info) in measured {
+                    self.soundInfos[file] = info
+                }
+                self.busySlots.subtract(pads.map(\.slot))
+                if !problems.isEmpty {
+                    self.alert = AlertMessage(
+                        title: "Some files couldn't be added",
+                        message: problems.prefix(8).joined(separator: "\n")
+                    )
+                }
+                self.refreshShow(undo: "Add \(count) Pad\(count == 1 ? "" : "s")")
+            }
+        }
+    }
+
+    /// Selected library files onto the current bank's empty pads.
+    func addLibraryFilesToBank(_ files: [String]) {
+        addPads(urls: files.map(libraryURL), bank: currentBank)
+    }
+
+    // MARK: - Bank settings
+
+    @Published var showingBankSettings = false
+
+    /// nil = the bank uses the show's settings for new pads.
+    func setBankDefaults(bank: Int, _ defaults: PadDefaults?) {
+        report { try session.setBankDefaults(bank: bank, defaults) }
+        refreshShow(undo: "Bank Settings")
+    }
+
+    @Published var showingBulkEdit = false
+    /// The scope Bulk Edit opens with (nil = the whole show).
+    var bulkEditBank: Int?
+
+    func openBulkEdit(bank: Int?) {
+        bulkEditBank = bank
+        showingBulkEdit = true
+    }
+
+    /// Changes chosen settings on every pad (bank nil) or one bank's.
+    func bulkEdit(bank: Int?, changes: [String: Any]) {
+        var changed = 0
+        report { changed = try session.bulkEdit(bank: bank, changes: changes) }
+        refreshShow(undo: "Bulk Edit")
+        notices.append(changed == 0 ? "No pads needed changing." : "Updated \(changed) pad\(changed == 1 ? "" : "s").")
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 6_000_000_000)
+            if let self, !self.notices.isEmpty { self.notices.removeFirst() }
+        }
     }
 
     // MARK: - Pad style and pictures
@@ -1144,11 +1334,61 @@ final class AppModel: ObservableObject {
 
     /// Plays a library file in the headphones (decoding it first, in the
     /// background); again stops it.
+    /// The library's player has somewhere to play.
+    var canPlayLibrary: Bool { show.libraryOutput != nil || show.previewOutput != nil }
+
+    /// Where the library plays, for display.
+    var libraryOutputName: String {
+        if let index = show.libraryOutput, show.outputs.indices.contains(index) {
+            return show.outputs[index].name
+        }
+        if let index = show.previewOutput, show.outputs.indices.contains(index) {
+            return "\(show.outputs[index].name) (preview)"
+        }
+        return "No output"
+    }
+
+    /// nil = the preview output.
+    func setLibraryOutput(_ output: Int?) {
+        report { try session.setLibraryOutput(output) }
+        refreshShow(undo: "Library Output")
+    }
+
+    /// The library file the player has loaded (playing or paused).
+    var libraryPlaying: PreviewInfo? {
+        guard let preview = status?.preview, preview.file != nil else { return nil }
+        return preview
+    }
+
+    /// Play (or carry on) a library file.
+    func playLibraryFile(_ file: String) {
+        if let current = libraryPlaying, current.file == file {
+            if current.paused {
+                report { try session.resumePreview() }
+                refreshStatus()
+                return
+            }
+            if current.playing { return }
+        }
+        session.stopPreview()
+        previewFile(file)
+    }
+
+    func pauseLibrary() {
+        report { try session.pausePreview() }
+        refreshStatus()
+    }
+
+    func downloadFile(_ file: String) {
+        report { try session.downloadFile(file) }
+        refreshShow()
+    }
+
     func previewFile(_ file: String) {
-        guard canPreview else {
+        guard canPlayLibrary else {
             alert = AlertMessage(
                 title: "No preview output",
-                message: "Choose a preview output (for example headphones) in Audio Outputs."
+                message: "Choose a preview output (for example headphones) in Audio Outputs, or pick an output for the library's player."
             )
             return
         }
@@ -1178,10 +1418,10 @@ final class AppModel: ObservableObject {
     /// The pad's default key (by its position in its bank) if unused in
     /// that bank, else the first unused one. Keys only act in the visible
     /// bank, so banks can reuse them.
-    private func freeHotkey(preferring slot: Int) -> String? {
+    private func freeHotkey(preferring slot: Int, alsoTaken: Set<String> = []) -> String? {
         let perBank = max(show.slots, 1)
         let bank = slot / perBank
-        let used = Set(show.cues.filter { $0.slot / perBank == bank }.compactMap(\.hotkey))
+        let used = Set(show.cues.filter { $0.slot / perBank == bank }.compactMap(\.hotkey)).union(alsoTaken)
         let keys = Self.defaultHotkeys.map(String.init)
         let position = slot % perBank
         if keys.indices.contains(position), !used.contains(keys[position]) {

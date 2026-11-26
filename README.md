@@ -5,7 +5,7 @@ as a native macOS app. Inspired by Sports Sounds Pro, it adds
 sample-accurate timeline markers with actions (loop, jump, pause, fade) and
 support for several audio interfaces at once.
 
-**Status:** v0.4.0 (pad actions, colour presets, played pads, event log) is ready for testing on a Mac. A Mac app with:
+**Status:** v0.4.0 is ready for testing on a Mac; v0.5.0 (batch drops, library player, bank settings, cloud downloads) is in progress. A Mac app with:
 - a configurable pad grid with hotkeys and colours;
 - show files that autosave;
 - several audio interfaces at once, with automatic failover to a backup;
@@ -25,8 +25,10 @@ support for several audio interfaces at once.
   automatic trimming of silence at the start of dropped files;
 - a game rundown fired step by step with GO (Space, MIDI, OSC or the
   phone remote);
-- an audio library to build pads from (with watch folders that add new
-  clips automatically), custom pad colours and pictures,
+- an audio library to build pads from, with a player, Add to Bank, and
+  watch folders that add new clips automatically (and download Box
+  Drive / iCloud files); drop many files at once for a pad each; custom
+  pad colours and pictures,
   copy/paste of pad styles, and defaults for new pads;
 - pad actions: play over / solo per pad, and actions when a pad fires
   (stop others, fire or stop a pad, duck everything else, switch bank);

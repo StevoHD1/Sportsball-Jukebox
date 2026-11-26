@@ -91,6 +91,14 @@ struct ContentView: View {
             GameLogView()
                 .environmentObject(model)
         }
+        .sheet(isPresented: $model.showingBulkEdit) {
+            BulkEditView()
+                .environmentObject(model)
+        }
+        .sheet(isPresented: $model.showingBankSettings) {
+            BankSettingsView()
+                .environmentObject(model)
+        }
         .sheet(isPresented: $model.showingEvents) {
             EventLogView()
                 .environmentObject(model)
@@ -139,7 +147,25 @@ private struct PadGrid: View {
                 CueButton(slot: slot, height: padHeight)
             }
         }
+        .padding(6)
+        .contentShape(Rectangle())
+        .overlay {
+            if isDropTarget {
+                RoundedRectangle(cornerRadius: 10)
+                    .strokeBorder(Color.accentColor, style: StrokeStyle(lineWidth: 2, dash: [6, 4]))
+                    .allowsHitTesting(false)
+            }
+        }
+        // Files dropped between pads fill the bank's empty pads.
+        .dropDestination(for: URL.self) { urls, _ in
+            let files = urls.filter(\.isFileURL)
+            guard !files.isEmpty else { return false }
+            model.addPads(urls: files, bank: model.currentBank)
+            return true
+        } isTargeted: { isDropTarget = $0 }
     }
+
+    @State private var isDropTarget = false
 }
 
 private struct HeaderBar: View {
@@ -381,6 +407,16 @@ private struct BankBar: View {
                 }
                 .buttonStyle(.plain)
                 .help("Pad keys apply to the bank shown")
+                .contextMenu {
+                    Button("Bank Settings…") {
+                        model.selectBank(index)
+                        model.showingBankSettings = true
+                    }
+                    Button("Bulk Edit This Bank's Pads…") {
+                        model.selectBank(index)
+                        model.openBulkEdit(bank: index)
+                    }
+                }
                 .accessibilityLabel("Bank \(name)")
                 .accessibilityAddTraits(index == model.currentBank ? .isSelected : [])
             }
@@ -398,6 +434,14 @@ private struct BankBar: View {
                 .toggleStyle(.switch)
                 .controlSize(.small)
                 .help("On: this bank's pads play over each other. Off: firing a pad fades out the bank's other pads.")
+            Button {
+                model.showingBankSettings = true
+            } label: {
+                Label("Bank Settings…", systemImage: model.show.hasOwnDefaults(bank: model.currentBank) ? "gearshape.fill" : "gearshape")
+            }
+            .labelStyle(.iconOnly)
+            .buttonStyle(.borderless)
+            .help("Bank settings: Multiplay and this bank's own settings for new pads")
             Divider().frame(height: 18)
             Toggle("Fit", isOn: $model.fitPadsToWindow)
                 .toggleStyle(.switch)

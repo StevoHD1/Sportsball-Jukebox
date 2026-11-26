@@ -10,7 +10,9 @@
 //! library comes back on the next scan while it's still in the folder.
 
 use std::collections::{HashMap, HashSet};
+use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc;
 use std::time::{Duration, Instant, SystemTime};
 
 use sbj_backend::AudioBackend;
@@ -23,6 +25,12 @@ use crate::show::resolve_file;
 pub const AUDIO_EXTENSIONS: &[&str] = &[
     "wav", "wave", "aif", "aiff", "aifc", "caf", "flac", "mp3", "m4a", "aac", "mp4", "alac", "ogg",
     "oga",
+];
+
+/// File types a watch folder picks up unless told otherwise: every audio
+/// type except MP4, which is usually video.
+pub const WATCH_DEFAULT_TYPES: &[&str] = &[
+    "wav", "wave", "aif", "aiff", "aifc", "caf", "flac", "mp3", "m4a", "aac", "alac", "ogg", "oga",
 ];
 
 /// Time between scans.
@@ -41,6 +49,96 @@ pub struct WatchFolder {
     /// Also watch folders inside it.
     #[serde(default = "yes")]
     pub subfolders: bool,
+    /// Download files that are only in the cloud (Box Drive, iCloud and
+    /// other File Provider folders) so they're on this Mac.
+    #[serde(default = "yes")]
+    pub download: bool,
+    /// File extensions to pick up (lower case, e.g. "wav", "mp3"); empty =
+    /// [`WATCH_DEFAULT_TYPES`]. Only audio types are ever picked up.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub types: Vec<String>,
+}
+
+impl WatchFolder {
+    /// Whether this folder picks up files with extension `ext`.
+    pub fn accepts(&self, ext: &str) -> bool {
+        let ext = ext.to_ascii_lowercase();
+        if !AUDIO_EXTENSIONS.contains(&ext.as_str()) {
+            return false;
+        }
+        if self.types.is_empty() {
+            WATCH_DEFAULT_TYPES.contains(&ext.as_str())
+        } else {
+            self.types.iter().any(|t| t.eq_ignore_ascii_case(&ext))
+        }
+    }
+}
+
+/// Downloads running at once.
+const MAX_DOWNLOADS: usize = 4;
+
+/// A file that still looks online-only after being downloaded (Box gave
+/// its space back, or the download failed) isn't fetched again
+/// automatically for this long.
+const REFETCH_AFTER: Duration = Duration::from_secs(600);
+
+/// Whether a file is a cloud placeholder whose contents aren't on this
+/// Mac yet (macOS "dataless" files, as Box Drive and iCloud leave them).
+/// Reading it makes the cloud app download it.
+pub fn is_online_only(path: &Path) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::macos::fs::MetadataExt;
+        /// `SF_DATALESS` from `<sys/stat.h>`.
+        const SF_DATALESS: u32 = 0x4000_0000;
+        std::fs::symlink_metadata(path).is_ok_and(|m| m.st_flags() & SF_DATALESS != 0)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = path;
+        false
+    }
+}
+
+/// Reads a whole file, which makes a cloud app download it.
+fn fetch(path: &Path) -> std::io::Result<u64> {
+    let mut file = std::fs::File::open(path)?;
+    let mut buffer = vec![0u8; 1 << 20];
+    let mut total = 0u64;
+    loop {
+        match file.read(&mut buffer)? {
+            0 => return Ok(total),
+            n => total += n as u64,
+        }
+    }
+}
+
+/// Background downloads of online-only files (not reset with the show).
+#[derive(Debug)]
+pub(crate) struct Downloads {
+    sender: mpsc::Sender<(PathBuf, std::io::Result<u64>)>,
+    receiver: mpsc::Receiver<(PathBuf, std::io::Result<u64>)>,
+    active: HashSet<PathBuf>,
+    /// When each file was last fetched automatically.
+    fetched: HashMap<PathBuf, Instant>,
+    /// Counts starts and finishes (the app reloads the library).
+    pub(crate) changes: u64,
+    /// For tests: which files count as online-only.
+    pub(crate) probe: fn(&Path) -> bool,
+}
+
+impl Default for Downloads {
+    fn default() -> Self {
+        let (sender, receiver) = mpsc::channel();
+        Self {
+            sender,
+            receiver,
+            active: HashSet::new(),
+            fetched: HashMap::new(),
+            changes: 0,
+            probe: is_online_only,
+        }
+    }
 }
 
 fn yes() -> bool {
@@ -61,12 +159,6 @@ pub(crate) struct WatchState {
     pub(crate) imports: u64,
 }
 
-fn is_audio(path: &Path) -> bool {
-    path.extension()
-        .and_then(|e| e.to_str())
-        .is_some_and(|e| AUDIO_EXTENSIONS.contains(&e.to_ascii_lowercase().as_str()))
-}
-
 fn hidden(path: &Path) -> bool {
     path.file_name()
         .and_then(|n| n.to_str())
@@ -76,7 +168,7 @@ fn hidden(path: &Path) -> bool {
 /// Audio files in `dir` (and below, with `deep`), with size and mtime.
 fn list(
     dir: &Path,
-    deep: bool,
+    folder: &WatchFolder,
     depth: usize,
     out: &mut Vec<(PathBuf, u64, Option<SystemTime>)>,
 ) -> std::io::Result<()> {
@@ -91,10 +183,15 @@ fn list(
             continue;
         };
         if kind.is_dir() {
-            if deep && depth < MAX_DEPTH {
-                let _ = list(&path, deep, depth + 1, out);
+            if folder.subfolders && depth < MAX_DEPTH {
+                let _ = list(&path, folder, depth + 1, out);
             }
-        } else if kind.is_file() && is_audio(&path) {
+        } else if kind.is_file()
+            && path
+                .extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|e| folder.accepts(e))
+        {
             if let Ok(meta) = entry.metadata() {
                 out.push((path, meta.len(), meta.modified().ok()));
             }
@@ -115,6 +212,14 @@ impl<B: AudioBackend> Session<B> {
         let mut clean: Vec<WatchFolder> = Vec::new();
         for mut folder in folders {
             folder.path = folder.path.trim().trim_end_matches('/').to_string();
+            for t in &mut folder.types {
+                *t = t.trim().trim_start_matches('.').to_ascii_lowercase();
+            }
+            folder
+                .types
+                .retain(|t| AUDIO_EXTENSIONS.contains(&t.as_str()));
+            folder.types.sort();
+            folder.types.dedup();
             if folder.path.is_empty() {
                 // "/" trimmed to nothing: refuse to watch the whole disk.
                 continue;
@@ -155,6 +260,101 @@ impl<B: AudioBackend> Session<B> {
             .retain(|p| p != &path && p.canonicalize().map_or(true, |c| c != canonical));
     }
 
+    /// Whether a library file is only in the cloud (not on this Mac).
+    pub fn is_file_online_only(&self, file: &str) -> bool {
+        self.resolve_library_file(file)
+            .is_some_and(|p| (self.downloads.probe)(&p))
+    }
+
+    /// Whether a library file is being downloaded.
+    pub fn is_downloading(&self, file: &str) -> bool {
+        self.resolve_library_file(file)
+            .is_some_and(|p| self.downloads.active.contains(&p))
+    }
+
+    /// Counts download starts and finishes (reload the library when it
+    /// changes).
+    pub fn download_changes(&self) -> u64 {
+        self.downloads.changes
+    }
+
+    /// For tests: decide which files count as online-only.
+    pub fn set_online_only_probe(&mut self, probe: fn(&Path) -> bool) {
+        self.downloads.probe = probe;
+    }
+
+    fn resolve_library_file(&self, file: &str) -> Option<PathBuf> {
+        resolve_file(file, self.show_dir().as_deref())
+    }
+
+    /// Downloads a library file that's only in the cloud, in the
+    /// background (reading it makes Box Drive or iCloud fetch it).
+    pub fn download_file(&mut self, file: &str) -> crate::Result<()> {
+        let path = self.resolve_library_file(file).ok_or_else(|| {
+            crate::SessionError::Show(crate::ShowError::Invalid(format!("{file} can't be found")))
+        })?;
+        self.start_download(path);
+        Ok(())
+    }
+
+    fn start_download(&mut self, path: PathBuf) {
+        if !self.downloads.active.insert(path.clone()) {
+            return;
+        }
+        let sender = self.downloads.sender.clone();
+        let spawned = std::thread::Builder::new()
+            .name("sbj-download".into())
+            .spawn({
+                let path = path.clone();
+                move || {
+                    let result = fetch(&path);
+                    let _ = sender.send((path, result));
+                }
+            });
+        if let Err(e) = spawned {
+            self.downloads.active.remove(&path);
+            self.log_event(
+                "error",
+                "library",
+                format!("Couldn't start downloading \"{}\": {e}", path.display()),
+            );
+            return;
+        }
+        self.downloads.changes += 1;
+        self.log_event(
+            "info",
+            "library",
+            format!("Downloading \"{}\" from the cloud.", path.display()),
+        );
+    }
+
+    /// Reports finished downloads (called from `poll`).
+    pub(crate) fn finish_downloads(&mut self) {
+        while let Ok((path, result)) = self.downloads.receiver.try_recv() {
+            self.downloads.active.remove(&path);
+            self.downloads.changes += 1;
+            let name = path.file_name().map_or_else(
+                || path.display().to_string(),
+                |n| n.to_string_lossy().into_owned(),
+            );
+            match result {
+                Ok(bytes) => self.log_event(
+                    "info",
+                    "library",
+                    format!(
+                        "Downloaded \"{name}\" ({:.1} MB).",
+                        bytes as f64 / 1_048_576.0
+                    ),
+                ),
+                Err(e) => self.log_event(
+                    "warning",
+                    "library",
+                    format!("Couldn't download \"{}\": {e}", path.display()),
+                ),
+            }
+        }
+    }
+
     /// For tests: scan more often.
     pub fn set_watch_interval(&mut self, interval: Duration) {
         self.watch_interval = interval;
@@ -182,7 +382,30 @@ impl<B: AudioBackend> Session<B> {
 
         let mut found = Vec::new();
         for folder in self.show.watch_folders.clone() {
-            let result = list(Path::new(&folder.path), folder.subfolders, 0, &mut found);
+            let first = found.len();
+            let result = list(Path::new(&folder.path), &folder, 0, &mut found);
+            if folder.download {
+                let probe = self.downloads.probe;
+                let downloads = &self.downloads;
+                let recent = |p: &PathBuf| {
+                    downloads
+                        .fetched
+                        .get(p)
+                        .is_some_and(|t| now.duration_since(*t) < REFETCH_AFTER)
+                };
+                let wanted: Vec<PathBuf> = found[first..]
+                    .iter()
+                    .map(|(p, ..)| p.clone())
+                    .filter(|p| !downloads.active.contains(p) && !recent(p) && probe(p))
+                    .collect();
+                for path in wanted {
+                    if self.downloads.active.len() >= MAX_DOWNLOADS {
+                        break; // the rest on later scans
+                    }
+                    self.downloads.fetched.insert(path.clone(), now);
+                    self.start_download(path);
+                }
+            }
             match result {
                 Ok(()) => {
                     if self.watch.missing.remove(&folder.path) {

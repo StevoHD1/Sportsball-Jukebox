@@ -139,6 +139,21 @@ pub struct Show {
     /// Folders whose new audio files are added to the library.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub watch_folders: Vec<crate::WatchFolder>,
+    /// Pages (banks) with their own settings for new pads, overriding
+    /// `pad_defaults`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bank_defaults: Vec<BankDefaults>,
+    /// Where the library's player plays; `None` = the preview output.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub library_output: Option<u32>,
+}
+
+/// One page's own settings for new pads.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BankDefaults {
+    /// 0-based.
+    pub bank: u32,
+    pub defaults: PadDefaults,
 }
 
 /// A named pad colour kept with the show.
@@ -310,6 +325,8 @@ impl Default for Show {
             colors: Vec::new(),
             played_color: None,
             watch_folders: Vec::new(),
+            bank_defaults: Vec::new(),
+            library_output: None,
             mark_played: true,
         }
     }

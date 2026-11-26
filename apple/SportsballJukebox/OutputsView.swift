@@ -267,8 +267,13 @@ struct ShowSettingsView: View {
                 .padding(.top, 6)
             }
             DisclosureGroup("New pads") {
-                PadDefaultsEditor(defaults: $padDefaults, outputs: model.show.outputs)
-                    .padding(.top, 6)
+                VStack(alignment: .leading, spacing: 8) {
+                    PadDefaultsEditor(defaults: $padDefaults, outputs: model.show.outputs)
+                    Text("To change pads that already exist, use Show → Bulk Edit Pads….")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.top, 6)
             }
             Text("Banks").font(.headline)
             Text("Each bank is a page of pads. Switch with ⌘1–⌘9, the bank tabs, MIDI or OSC.")
@@ -340,7 +345,7 @@ struct ShowSettingsView: View {
 }
 
 /// What a new pad starts with when audio is dropped on an empty pad.
-private struct PadDefaultsEditor: View {
+struct PadDefaultsEditor: View {
     @EnvironmentObject private var model: AppModel
     @Binding var defaults: PadDefaults
     let outputs: [OutputDoc]

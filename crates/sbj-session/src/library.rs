@@ -5,7 +5,7 @@
 
 use sbj_backend::AudioBackend;
 
-use crate::show::{PadDefaults, ShowColor};
+use crate::show::{BankDefaults, PadDefaults, ShowColor};
 use crate::{Result, Session, SessionError, ShowError};
 
 /// One library file, for display.
@@ -20,6 +20,9 @@ pub struct LibraryEntry {
     pub loudness_lufs: Option<f64>,
     /// Could not be decoded, and why.
     pub error: Option<String>,
+    /// Only in the cloud (Box Drive, iCloud), not on this Mac yet.
+    pub online_only: bool,
+    pub downloading: bool,
 }
 
 impl<B: AudioBackend> Session<B> {
@@ -43,6 +46,8 @@ impl<B: AudioBackend> Session<B> {
                     duration_seconds: sound.map(|s| s.duration_seconds()),
                     loudness_lufs: sound.and_then(|s| s.analysis().loudness_lufs),
                     error: self.file_errors.get(&file).cloned(),
+                    online_only: sound.is_none() && self.is_file_online_only(&file),
+                    downloading: self.is_downloading(&file),
                     file,
                 }
             })
@@ -148,5 +153,39 @@ impl<B: AudioBackend> Session<B> {
             self.show.pad_defaults = defaults;
             self.dirty = true;
         }
+    }
+
+    /// A page's own settings for new pads (`None` = use the show's).
+    pub fn set_bank_defaults(&mut self, bank: u32, defaults: Option<PadDefaults>) -> Result<()> {
+        if bank as usize >= self.show.banks.len() {
+            return Err(SessionError::Show(ShowError::Invalid(format!(
+                "there is no page {}",
+                bank + 1
+            ))));
+        }
+        let before = self.show.bank_defaults.clone();
+        self.show.bank_defaults.retain(|d| d.bank != bank);
+        if let Some(defaults) = defaults {
+            self.show
+                .bank_defaults
+                .push(BankDefaults { bank, defaults });
+            self.show.bank_defaults.sort_by_key(|d| d.bank);
+        }
+        if self.show.bank_defaults != before {
+            self.dirty = true;
+        }
+        Ok(())
+    }
+
+    /// The settings new pads on `bank` get: the page's own, else the
+    /// show's, else the built-in ones.
+    pub fn effective_pad_defaults(&self, bank: u32) -> PadDefaults {
+        self.show
+            .bank_defaults
+            .iter()
+            .find(|d| d.bank == bank)
+            .map(|d| d.defaults.clone())
+            .or_else(|| self.show.pad_defaults.clone())
+            .unwrap_or_default()
     }
 }

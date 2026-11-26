@@ -43,12 +43,14 @@ mod remote;
 mod rundown;
 mod transport;
 pub use diagnostics::EventEntry;
+mod bulk;
 mod undo;
 mod watch;
+pub use bulk::PadChanges;
 pub use collect::CollectPlan;
 pub use library::LibraryEntry;
 pub use remote::RemoteError;
-pub use watch::{AUDIO_EXTENSIONS, WatchFolder};
+pub use watch::{AUDIO_EXTENSIONS, WATCH_DEFAULT_TYPES, WatchFolder, is_online_only};
 
 pub use log::{LogEntry, LogTotal};
 
@@ -58,10 +60,10 @@ mod preflight;
 pub use control::{ControlMessage, LearnTarget, MidiMessage};
 pub use preflight::{Check, CheckLevel, Preflight};
 pub use show::{
-    ActionDoc, ActionKind, ClipDoc, ControlsDoc, CueDoc, CueProblem, CurveDoc, DEFAULT_FADE_OUT,
-    DeviceRef, FireAction, FireActionKind, MAX_PADS_PER_BANK, MAX_SLOTS, MarkerDoc, MidiKind,
-    MidiTrigger, OutputDoc, PadDefaults, PadTarget, PlayMode, PlaylistDoc, Retrigger, RouteDoc,
-    RundownItem, Show, ShowColor, ShowError, TargetDoc,
+    ActionDoc, ActionKind, BankDefaults, ClipDoc, ControlsDoc, CueDoc, CueProblem, CurveDoc,
+    DEFAULT_FADE_OUT, DeviceRef, FireAction, FireActionKind, MAX_PADS_PER_BANK, MAX_SLOTS,
+    MarkerDoc, MidiKind, MidiTrigger, OutputDoc, PadDefaults, PadTarget, PlayMode, PlaylistDoc,
+    Retrigger, RouteDoc, RundownItem, Show, ShowColor, ShowError, TargetDoc,
 };
 
 /// How often to retry an output whose devices are all unavailable.
@@ -357,6 +359,7 @@ pub struct Session<B: AudioBackend> {
     retry_interval: Duration,
     /// Watch folder scanning (see `watch`).
     watch: watch::WatchState,
+    downloads: watch::Downloads,
     watch_interval: Duration,
     /// Override for the engine's declick length (tests use 0).
     declick_seconds: Option<f64>,
@@ -391,6 +394,8 @@ pub struct Session<B: AudioBackend> {
     previewing_file: Option<String>,
     /// Length of what is being previewed, seconds.
     preview_length: f64,
+    /// The preview was paused (play resumes it).
+    preview_paused: bool,
     log: log::PlayLog,
 }
 
@@ -412,6 +417,7 @@ impl<B: AudioBackend> Session<B> {
             master_gain: 1.0,
             retry_interval: DEFAULT_RETRY_INTERVAL,
             watch: watch::WatchState::default(),
+            downloads: watch::Downloads::default(),
             watch_interval: watch::DEFAULT_WATCH_INTERVAL,
             declick_seconds: None,
             current_bank: 0,
@@ -431,6 +437,7 @@ impl<B: AudioBackend> Session<B> {
             previewing: None,
             previewing_file: None,
             preview_length: 0.0,
+            preview_paused: false,
             log: log::PlayLog::new(),
         }
     }
@@ -580,6 +587,7 @@ impl<B: AudioBackend> Session<B> {
         self.show.banks = banks;
         let bank_count = self.show.banks.len() as u32;
         self.show.single_play.retain(|&b| b < bank_count);
+        self.show.bank_defaults.retain(|d| d.bank < bank_count);
         self.current_bank = self.current_bank.min(self.show.banks.len() as u32 - 1);
         self.dirty = true;
         moved.sort_unstable();
@@ -707,6 +715,14 @@ impl<B: AudioBackend> Session<B> {
             .is_some_and(|p| p as usize >= count)
         {
             self.show.preview_output = None;
+            self.previewing = None;
+        }
+        if self
+            .show
+            .library_output
+            .is_some_and(|p| p as usize >= count)
+        {
+            self.show.library_output = None;
             self.previewing = None;
         }
         for cue in &mut self.show.cues {
@@ -1393,6 +1409,7 @@ impl<B: AudioBackend> Session<B> {
         }
         self.handle_marker_events(&reached);
         self.check_glitches();
+        self.finish_downloads();
         self.scan_watch_folders();
         self.run_scheduled_fires();
         self.log.source = "auto";

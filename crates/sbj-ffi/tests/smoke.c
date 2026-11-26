@@ -84,6 +84,15 @@ int main(void) {
           == SBJ_STATUS_OK);
     CHECK(sbj_session_set_pad_defaults_json(s, "{\"fade_in\":\"x\"}") == SBJ_STATUS_INVALID_ARGUMENT);
     CHECK(sbj_session_set_pad_defaults_json(s, NULL) == SBJ_STATUS_OK);
+    CHECK(sbj_session_set_bank_defaults_json(s, 0, "{\"color\":\"#00ff00\"}") == SBJ_STATUS_OK);
+    CHECK(sbj_session_set_bank_defaults_json(s, 999, NULL) != SBJ_STATUS_OK);
+    uint32_t changed = 0;
+    CHECK(sbj_session_bulk_edit_json(s, 0, "{\"fade_out\":2,\"color\":null}", &changed)
+          == SBJ_STATUS_OK);
+    CHECK(sbj_session_bulk_edit_json(s, -1, "{\"loop\":true}", NULL) == SBJ_STATUS_OK);
+    CHECK(sbj_session_bulk_edit_json(s, -1, "{\"output\":99}", NULL) != SBJ_STATUS_OK);
+    CHECK(sbj_session_bulk_edit_json(s, -1, "nope", NULL) == SBJ_STATUS_INVALID_ARGUMENT);
+    CHECK(sbj_session_set_bank_defaults_json(s, 0, NULL) == SBJ_STATUS_OK);
     CHECK(sbj_session_set_show_colors_json(s, "[{\"name\":\"Home\",\"value\":\"#c8102e\"}]", true)
           == SBJ_STATUS_OK);
     CHECK(sbj_session_set_show_colors_json(s, "nope", false) == SBJ_STATUS_INVALID_ARGUMENT);
@@ -194,6 +203,13 @@ int main(void) {
     CHECK(sbj_session_preview_cue(s, 3) == SBJ_STATUS_OK ||
           sbj_session_preview_cue(s, 3) == SBJ_STATUS_NO_OUTPUT);
     CHECK(sbj_session_stop_preview(s) == SBJ_STATUS_OK);
+    CHECK(sbj_session_pause_preview(s) == SBJ_STATUS_OK);
+    CHECK(sbj_session_resume_preview(s) == SBJ_STATUS_OK);
+    CHECK(sbj_session_set_library_output(s, 0) == SBJ_STATUS_OK);
+    CHECK(sbj_session_set_library_output(s, 99) != SBJ_STATUS_OK);
+    CHECK(sbj_session_set_library_output(s, -1) == SBJ_STATUS_OK);
+    CHECK(sbj_session_download_file(s, "/nonexistent/x.wav") != SBJ_STATUS_OK);
+    CHECK(sbj_session_download_file(NULL, "x") != SBJ_STATUS_OK);
     CHECK(sbj_session_set_preview_output(s, -1) == SBJ_STATUS_OK);
     CHECK(sbj_session_set_game(s, "Smoke vs. Test") == SBJ_STATUS_OK);
     CHECK(sbj_session_set_log_dir(s, NULL) == SBJ_STATUS_OK);

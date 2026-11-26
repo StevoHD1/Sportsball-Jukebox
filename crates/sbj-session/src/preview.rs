@@ -24,6 +24,8 @@ pub struct PreviewState {
     /// The library file being previewed, if any.
     pub file: Option<String>,
     pub playing: bool,
+    /// Paused by the library's player (play resumes).
+    pub paused: bool,
     pub position_seconds: f64,
     pub duration_seconds: f64,
 }
@@ -120,14 +122,36 @@ impl<B: AudioBackend> Session<B> {
         Ok(())
     }
 
-    /// Plays a decoded library file on the preview output, level-matched
-    /// like a new pad would be. Previewing it again stops it.
+    /// Where the library's player plays (`None` = the preview output).
+    pub fn set_library_output(&mut self, output: Option<u32>) -> Result<()> {
+        if let Some(o) = output
+            && o as usize >= self.show.outputs.len()
+        {
+            return Err(SessionError::InvalidOutput(o));
+        }
+        if self.previewing_file.is_some() {
+            self.stop_preview();
+        }
+        if self.show.library_output != output {
+            self.show.library_output = output;
+            self.dirty = true;
+        }
+        Ok(())
+    }
+
+    /// Plays a decoded library file through the library output (the
+    /// preview output unless another is chosen), level-matched like a new
+    /// pad would be. Previewing it again stops it.
     pub fn preview_file(&mut self, file: &str) -> Result<()> {
-        let output = self.show.preview_output.ok_or_else(|| {
-            SessionError::Show(ShowError::Invalid(
-                "no preview output is set (choose one in Audio Outputs)".into(),
-            ))
-        })? as usize;
+        let output = self
+            .show
+            .library_output
+            .or(self.show.preview_output)
+            .ok_or_else(|| {
+                SessionError::Show(ShowError::Invalid(
+                    "no preview output is set (choose one in Audio Outputs, or pick an output for the library's player)".into(),
+                ))
+            })? as usize;
         if self.previewing_file.as_deref() == Some(file)
             && self.preview_state().is_some_and(|p| p.playing)
         {
@@ -182,11 +206,46 @@ impl<B: AudioBackend> Session<B> {
             sbj_engine::seconds_to_samples(seconds.clamp(0.0, length), live.config.sample_rate);
         live.controller.seek(PREVIEW_PLAYER, position)?;
         live.controller.play(PREVIEW_PLAYER)?;
+        self.preview_paused = false;
+        Ok(())
+    }
+
+    /// Pauses the preview where it is.
+    pub fn pause_preview(&mut self) -> Result<()> {
+        let Some((_, output)) = self.previewing else {
+            return Ok(());
+        };
+        let live = self
+            .outputs
+            .get_mut(output)
+            .and_then(|o| o.live.as_mut())
+            .ok_or(SessionError::NoOutput)?;
+        live.controller.pause(PREVIEW_PLAYER)?;
+        self.preview_paused = true;
+        Ok(())
+    }
+
+    /// Carries on from where the preview was paused.
+    pub fn resume_preview(&mut self) -> Result<()> {
+        let Some((_, output)) = self.previewing else {
+            return Ok(());
+        };
+        if !self.preview_paused {
+            return Ok(());
+        }
+        let live = self
+            .outputs
+            .get_mut(output)
+            .and_then(|o| o.live.as_mut())
+            .ok_or(SessionError::NoOutput)?;
+        live.controller.play(PREVIEW_PLAYER)?;
+        self.preview_paused = false;
         Ok(())
     }
 
     pub fn stop_preview(&mut self) {
         self.previewing_file = None;
+        self.preview_paused = false;
         if let Some((_, output)) = self.previewing.take()
             && let Some(live) = self.outputs.get_mut(output).and_then(|o| o.live.as_mut())
         {
@@ -201,6 +260,7 @@ impl<B: AudioBackend> Session<B> {
             slot,
             file: self.previewing_file.clone(),
             playing: live.controller.is_playing(PREVIEW_PLAYER),
+            paused: self.preview_paused && !live.controller.is_playing(PREVIEW_PLAYER),
             position_seconds: samples_to_seconds(
                 live.controller.position(PREVIEW_PLAYER),
                 live.config.sample_rate,
