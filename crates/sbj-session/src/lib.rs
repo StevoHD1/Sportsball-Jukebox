@@ -43,12 +43,14 @@ mod remote;
 mod rundown;
 mod transport;
 pub use diagnostics::EventEntry;
+mod bulk;
 mod undo;
 mod watch;
+pub use bulk::PadChanges;
 pub use collect::CollectPlan;
 pub use library::LibraryEntry;
 pub use remote::RemoteError;
-pub use watch::{AUDIO_EXTENSIONS, WatchFolder, is_online_only};
+pub use watch::{AUDIO_EXTENSIONS, WATCH_DEFAULT_TYPES, WatchFolder, is_online_only};
 
 pub use log::{LogEntry, LogTotal};
 

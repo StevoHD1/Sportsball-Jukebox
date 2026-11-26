@@ -32,6 +32,9 @@ struct SportsballJukeboxApp: App {
                     .keyboardShortcut("m", modifiers: [.command, .shift])
                 Button("Show Settings…") { model.showingSettings = true }
                 Button("Bank Settings…") { model.showingBankSettings = true }
+                Button("Bulk Edit Pads…") { model.openBulkEdit(bank: nil) }
+                    .keyboardShortcut("b", modifiers: [.command, .shift])
+                Button("Bulk Edit This Bank's Pads…") { model.openBulkEdit(bank: model.currentBank) }
                 Button("Colour Presets…") { model.showingColours = true }
                 Button("Watch Folders…") {
                     model.showingLibrary = true

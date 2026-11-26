@@ -455,7 +455,9 @@ the pre-game check warns about steps on empty pads.
   already has them, by resolved path or by name and size (so files
   copied into `Audio/` by Save With Audio don't come back as
   duplicates). Hidden files, links and empty files are ignored, and
-  subfolders go 8 deep at most. Files are never moved or copied: the
+  subfolders go 8 deep at most. Each folder picks up only its `types`
+  (extensions). Empty means every audio type except MP4, which is
+  usually video. Non-audio files are never picked up. Files are never moved or copied: the
   folder is the source of truth, so a file removed from the library
   comes back on the next scan while it's still in the folder. Imports bump the status JSON's `watch_imports`, which makes
   the app reload the library and record one "Import from Watch Folder"
@@ -485,10 +487,14 @@ the pre-game check warns about steps on empty pads.
   step. ⌥-drop makes a playlist pad instead.
 - **Bank settings:** `bank_defaults` gives a bank its own settings for
   new pads, overriding `pad_defaults`
-  (`effective_pad_defaults(bank)`). `apply_pad_defaults(bank)` gives
-  existing pads their bank's settings (colour, fades, loop, group,
-  output, duck, level match; not silence trimming), for one bank or all.
-  Removing a bank drops its settings.
+  (`effective_pad_defaults(bank)`). Removing a bank drops its settings.
+- **Bulk edit** (`bulk.rs`): `bulk_edit(bank, PadChanges)` changes only
+  the settings given, on every pad or on one bank's pads. The settings
+  are colour, volume, fades, loop, group, output, duck, level match,
+  retrigger and play mode. In the JSON, a field left out is left alone
+  and `null` clears it (a `deserialize_with` helper tells the two
+  apart). An output that doesn't exist is refused before anything
+  changes.
 - **Pad looks:** `color` is a preset name or `#RRGGBB` (the remote page
   understands both); `image` is a picture shown on the pad, copied into
   an `Images` folder beside a saved show and found there if the show

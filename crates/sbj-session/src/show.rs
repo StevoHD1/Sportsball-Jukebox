@@ -197,29 +197,6 @@ pub struct PadDefaults {
     pub level_match: bool,
 }
 
-impl PadDefaults {
-    /// Gives an existing pad these settings (colour, fades, loop, group,
-    /// output if it exists, ducking, level matching). Returns whether
-    /// anything changed. Leading-silence trimming only applies to new
-    /// pads.
-    pub fn apply_to(&self, cue: &mut CueDoc, outputs: usize) -> bool {
-        let before = cue.clone();
-        cue.color.clone_from(&self.color);
-        cue.fade_in = self.fade_in;
-        cue.fade_out = self.fade_out;
-        cue.looping = self.looping;
-        cue.group.clone_from(&self.group);
-        cue.output = if (self.output as usize) < outputs {
-            self.output
-        } else {
-            0
-        };
-        cue.duck = self.duck;
-        cue.level_match = self.level_match;
-        *cue != before
-    }
-}
-
 impl Default for PadDefaults {
     fn default() -> Self {
         Self {

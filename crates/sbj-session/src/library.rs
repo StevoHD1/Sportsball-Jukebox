@@ -188,31 +188,4 @@ impl<B: AudioBackend> Session<B> {
             .or_else(|| self.show.pad_defaults.clone())
             .unwrap_or_default()
     }
-
-    /// Gives existing pads their page's settings for new pads (colour,
-    /// fades, loop, group, output, ducking, level matching): every pad, or
-    /// with `bank` only that page's. Returns how many pads changed.
-    pub fn apply_pad_defaults(&mut self, bank: Option<u32>) -> Result<usize> {
-        let slots = self.show.slots.max(1);
-        let outputs = self.show.outputs.len();
-        let mut changed = Vec::new();
-        for cue in &self.show.cues {
-            let cue_bank = cue.slot / slots;
-            if bank.is_some_and(|b| b != cue_bank) {
-                continue;
-            }
-            let mut updated = cue.clone();
-            if self
-                .effective_pad_defaults(cue_bank)
-                .apply_to(&mut updated, outputs)
-            {
-                changed.push(updated);
-            }
-        }
-        let count = changed.len();
-        for cue in changed {
-            self.set_cue(cue)?;
-        }
-        Ok(count)
-    }
 }

@@ -26,6 +26,7 @@ fn watching(dir: &Path, subfolders: bool) -> (OfflineBackend, Session<OfflineBac
         path: dir.display().to_string(),
         subfolders,
         download: true,
+        types: vec![],
     }]);
     (backend, s)
 }
@@ -168,16 +169,19 @@ fn watch_folders_are_saved_with_the_show() {
             path: "/tmp/clips/".into(),
             subfolders: false,
             download: true,
+            types: vec![],
         },
         WatchFolder {
             path: "/tmp/clips".into(),
             subfolders: true,
             download: true,
+            types: vec![],
         },
         WatchFolder {
             path: "  ".into(),
             subfolders: true,
             download: true,
+            types: vec![],
         },
     ]);
     assert_eq!(s.watch_folders().len(), 1);
@@ -269,6 +273,7 @@ fn downloading_can_be_turned_off_per_folder() {
         path: dir.display().to_string(),
         subfolders: true,
         download: false,
+        types: vec![],
     }]);
     write_wav(&dir.join("cloud-Horn.wav"), 48_000, 100, 1000);
     let before = s.download_changes();
@@ -277,4 +282,36 @@ fn downloading_can_be_turned_off_per_folder() {
     assert_eq!(s.download_changes(), before);
     assert_eq!(library(&s), ["cloud-Horn.wav"], "still imported");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn folders_pick_up_only_the_chosen_file_types() {
+    let dir = temp("types");
+    let (_b, mut s) = watching(&dir, true);
+    for name in ["Horn.wav", "Song.mp3", "Clip.mp4", "Notes.txt", "Video.mov"] {
+        write_wav(&dir.join(name), 48_000, 100, 1000);
+    }
+    s.poll();
+    s.poll();
+    // By default: audio, but not MP4 (usually video), text or video.
+    assert_eq!(library(&s), ["Horn.wav", "Song.mp3"]);
+
+    let dir2 = temp("types-chosen");
+    let (_b2, mut s2) = watching(&dir2, true);
+    s2.set_watch_folders(vec![WatchFolder {
+        path: dir2.display().to_string(),
+        subfolders: true,
+        download: true,
+        types: vec![".MP4".into(), "wav".into(), "txt".into(), "wav".into()],
+    }]);
+    // Cleaned up: lower case, no dots, no repeats, audio types only.
+    assert_eq!(s2.watch_folders()[0].types, ["mp4", "wav"]);
+    for name in ["Horn.wav", "Song.mp3", "Clip.mp4", "Notes.txt"] {
+        write_wav(&dir2.join(name), 48_000, 100, 1000);
+    }
+    s2.poll();
+    s2.poll();
+    assert_eq!(library(&s2), ["Clip.mp4", "Horn.wav"]);
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&dir2);
 }

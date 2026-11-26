@@ -243,7 +243,7 @@ fn the_library_player_pauses_resumes_and_can_play_through_another_output() {
 }
 
 #[test]
-fn page_defaults_override_the_shows_and_apply_to_existing_pads() {
+fn page_defaults_override_the_shows() {
     let backend = two_devices();
     let mut s = session(&backend);
     s.set_show_settings("T", 4, 4, vec!["One".into(), "Two".into()])
@@ -268,23 +268,6 @@ fn page_defaults_override_the_shows_and_apply_to_existing_pads() {
     assert_eq!(s.effective_pad_defaults(0), show);
     assert_eq!(s.effective_pad_defaults(1), page_two);
 
-    // Only page two.
-    assert_eq!(s.apply_pad_defaults(Some(1)).unwrap(), 1);
-    assert_eq!(s.show().cue(4).unwrap().color.as_deref(), Some("#445566"));
-    assert!(s.show().cue(4).unwrap().looping);
-    assert_eq!(s.show().cue(0).unwrap().color, None);
-
-    // Everything: each page gets its own.
-    assert_eq!(s.apply_pad_defaults(None).unwrap(), 2);
-    assert_eq!(s.show().cue(0).unwrap().color.as_deref(), Some("#112233"));
-    assert!((s.show().cue(1).unwrap().fade_in - 0.5).abs() < 1e-9);
-    assert_eq!(s.show().cue(4).unwrap().color.as_deref(), Some("#445566"));
-    assert_eq!(
-        s.apply_pad_defaults(None).unwrap(),
-        0,
-        "nothing left to change"
-    );
-
     // Saved; dropping the page drops its defaults.
     let back = Show::from_json(&s.show().to_json()).unwrap();
     assert_eq!(back.bank_defaults.len(), 1);
@@ -294,4 +277,57 @@ fn page_defaults_override_the_shows_and_apply_to_existing_pads() {
     s.remove_cue(4).unwrap();
     s.set_show_settings("T", 4, 4, vec!["One".into()]).unwrap();
     assert!(s.show().bank_defaults.is_empty());
+}
+
+#[test]
+fn bulk_edits_change_only_the_chosen_settings() {
+    use sbj_session::{PadChanges, PlayMode, Retrigger};
+    let backend = two_devices();
+    let mut s = session(&backend);
+    s.set_show_settings("T", 4, 4, vec!["One".into(), "Two".into()])
+        .unwrap();
+    s.add_sound("a".into(), constant(0.5, 48_000));
+    for slot in [0, 1, 4] {
+        let mut cue = CueDoc::simple(slot, "Pad", "a");
+        cue.color = Some("#112233".into());
+        cue.group = Some("Music".into());
+        cue.fade_in = 0.25;
+        s.set_cue(cue).unwrap();
+    }
+
+    // Bank two only: fade-out 2 s; nothing else moves.
+    let fade = PadChanges {
+        fade_out: Some(Some(2.0)),
+        ..PadChanges::default()
+    };
+    assert_eq!(s.bulk_edit(Some(1), &fade).unwrap(), 1);
+    let four = s.show().cue(4).unwrap();
+    assert_eq!(four.fade_out, Some(2.0));
+    assert_eq!(four.color.as_deref(), Some("#112233"));
+    assert!((four.fade_in - 0.25).abs() < 1e-9);
+    assert_eq!(s.show().cue(0).unwrap().fade_out, None);
+    assert_eq!(s.bulk_edit(Some(1), &fade).unwrap(), 0, "already so");
+
+    // The whole show, from JSON as the app sends it: null clears.
+    let json = r#"{"color": null, "group": null, "loop": true, "retrigger": "fade", "play_mode": "over", "gain": 0.5}"#;
+    let changes: PadChanges = serde_json::from_str(json).unwrap();
+    assert_eq!(changes.color, Some(None));
+    assert_eq!(changes.fade_out, None, "left out = unchanged");
+    assert_eq!(s.bulk_edit(None, &changes).unwrap(), 3);
+    for cue in &s.show().cues {
+        assert_eq!(cue.color, None);
+        assert_eq!(cue.group, None);
+        assert!(cue.looping);
+        assert_eq!(cue.retrigger, Retrigger::Fade);
+        assert_eq!(cue.play_mode, PlayMode::Over);
+        assert!((cue.gain - 0.5).abs() < 1e-6);
+    }
+    assert_eq!(s.show().cue(4).unwrap().fade_out, Some(2.0));
+
+    // A missing output is refused, changing nothing.
+    let bad = PadChanges {
+        output: Some(9),
+        ..PadChanges::default()
+    };
+    assert!(s.bulk_edit(None, &bad).is_err());
 }

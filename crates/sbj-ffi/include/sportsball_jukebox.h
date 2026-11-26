@@ -187,11 +187,14 @@ SbjStatus sbj_session_set_pad_defaults_json(const SbjSession *session, const cha
  * [{"bank", "defaults"}]); NULL or "null" = use the show's. */
 SbjStatus sbj_session_set_bank_defaults_json(const SbjSession *session, uint32_t bank,
                                              const char *json);
-/* Give existing pads their page's settings for new pads (colour, fades,
- * loop, group, output, duck, level match); bank < 0 = every page.
+/* Bulk edit: change chosen settings on every pad (bank < 0) or one bank's.
+ * JSON, any of {"color": string|null, "gain": linear, "fade_in": s,
+ * "fade_out": s|null, "loop": bool, "group": string|null, "output": index,
+ * "duck": dB|null, "level_match": bool, "retrigger": "restart"|"stop"|"fade",
+ * "play_mode": "bank"|"over"|"solo"}; left out = unchanged, null = clear.
  * `changed` (may be NULL) receives how many pads changed. */
-SbjStatus sbj_session_apply_pad_defaults(const SbjSession *session, int32_t bank,
-                                         uint32_t *changed);
+SbjStatus sbj_session_bulk_edit_json(const SbjSession *session, int32_t bank, const char *json,
+                                     uint32_t *changed);
 
 /* [{"file", "used_by": [slot], "loaded", "duration": s|null,
  *   "loudness": LUFS|null, "error": string|null,
@@ -207,7 +210,8 @@ SbjStatus sbj_session_remove_from_library(const SbjSession *session, const char 
 /* Watch folders (saved with the show; show JSON "watch_folders"): new
  * audio files in them join the library once they've finished copying.
  * [{"path": string, "subfolders"?: bool, "download"?: bool (both default
- * true; download = fetch online-only cloud files)}]. Status JSON
+ * true; download = fetch online-only cloud files), "types"?: ["wav", ...]
+ * (extensions to pick up; empty = every audio type except mp4)}]. Status JSON
  * "watch_imports" counts imports (reload the library when it changes);
  * "missing_watch_folders": [path] can't be read. */
 SbjStatus sbj_session_set_watch_folders_json(const SbjSession *session, const char *json);

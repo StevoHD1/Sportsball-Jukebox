@@ -91,6 +91,10 @@ struct ContentView: View {
             GameLogView()
                 .environmentObject(model)
         }
+        .sheet(isPresented: $model.showingBulkEdit) {
+            BulkEditView()
+                .environmentObject(model)
+        }
         .sheet(isPresented: $model.showingBankSettings) {
             BankSettingsView()
                 .environmentObject(model)
@@ -407,6 +411,10 @@ private struct BankBar: View {
                     Button("Bank Settings…") {
                         model.selectBank(index)
                         model.showingBankSettings = true
+                    }
+                    Button("Bulk Edit This Bank's Pads…") {
+                        model.selectBank(index)
+                        model.openBulkEdit(bank: index)
                     }
                 }
                 .accessibilityLabel("Bank \(name)")

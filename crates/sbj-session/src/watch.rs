@@ -27,6 +27,12 @@ pub const AUDIO_EXTENSIONS: &[&str] = &[
     "oga",
 ];
 
+/// File types a watch folder picks up unless told otherwise: every audio
+/// type except MP4, which is usually video.
+pub const WATCH_DEFAULT_TYPES: &[&str] = &[
+    "wav", "wave", "aif", "aiff", "aifc", "caf", "flac", "mp3", "m4a", "aac", "alac", "ogg", "oga",
+];
+
 /// Time between scans.
 pub(crate) const DEFAULT_WATCH_INTERVAL: Duration = Duration::from_secs(2);
 
@@ -47,6 +53,25 @@ pub struct WatchFolder {
     /// other File Provider folders) so they're on this Mac.
     #[serde(default = "yes")]
     pub download: bool,
+    /// File extensions to pick up (lower case, e.g. "wav", "mp3"); empty =
+    /// [`WATCH_DEFAULT_TYPES`]. Only audio types are ever picked up.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub types: Vec<String>,
+}
+
+impl WatchFolder {
+    /// Whether this folder picks up files with extension `ext`.
+    pub fn accepts(&self, ext: &str) -> bool {
+        let ext = ext.to_ascii_lowercase();
+        if !AUDIO_EXTENSIONS.contains(&ext.as_str()) {
+            return false;
+        }
+        if self.types.is_empty() {
+            WATCH_DEFAULT_TYPES.contains(&ext.as_str())
+        } else {
+            self.types.iter().any(|t| t.eq_ignore_ascii_case(&ext))
+        }
+    }
 }
 
 /// Downloads running at once.
@@ -134,12 +159,6 @@ pub(crate) struct WatchState {
     pub(crate) imports: u64,
 }
 
-fn is_audio(path: &Path) -> bool {
-    path.extension()
-        .and_then(|e| e.to_str())
-        .is_some_and(|e| AUDIO_EXTENSIONS.contains(&e.to_ascii_lowercase().as_str()))
-}
-
 fn hidden(path: &Path) -> bool {
     path.file_name()
         .and_then(|n| n.to_str())
@@ -149,7 +168,7 @@ fn hidden(path: &Path) -> bool {
 /// Audio files in `dir` (and below, with `deep`), with size and mtime.
 fn list(
     dir: &Path,
-    deep: bool,
+    folder: &WatchFolder,
     depth: usize,
     out: &mut Vec<(PathBuf, u64, Option<SystemTime>)>,
 ) -> std::io::Result<()> {
@@ -164,10 +183,15 @@ fn list(
             continue;
         };
         if kind.is_dir() {
-            if deep && depth < MAX_DEPTH {
-                let _ = list(&path, deep, depth + 1, out);
+            if folder.subfolders && depth < MAX_DEPTH {
+                let _ = list(&path, folder, depth + 1, out);
             }
-        } else if kind.is_file() && is_audio(&path) {
+        } else if kind.is_file()
+            && path
+                .extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|e| folder.accepts(e))
+        {
             if let Ok(meta) = entry.metadata() {
                 out.push((path, meta.len(), meta.modified().ok()));
             }
@@ -188,6 +212,14 @@ impl<B: AudioBackend> Session<B> {
         let mut clean: Vec<WatchFolder> = Vec::new();
         for mut folder in folders {
             folder.path = folder.path.trim().trim_end_matches('/').to_string();
+            for t in &mut folder.types {
+                *t = t.trim().trim_start_matches('.').to_ascii_lowercase();
+            }
+            folder
+                .types
+                .retain(|t| AUDIO_EXTENSIONS.contains(&t.as_str()));
+            folder.types.sort();
+            folder.types.dedup();
             if folder.path.is_empty() {
                 // "/" trimmed to nothing: refuse to watch the whole disk.
                 continue;
@@ -351,7 +383,7 @@ impl<B: AudioBackend> Session<B> {
         let mut found = Vec::new();
         for folder in self.show.watch_folders.clone() {
             let first = found.len();
-            let result = list(Path::new(&folder.path), folder.subfolders, 0, &mut found);
+            let result = list(Path::new(&folder.path), &folder, 0, &mut found);
             if folder.download {
                 let probe = self.downloads.probe;
                 let downloads = &self.downloads;

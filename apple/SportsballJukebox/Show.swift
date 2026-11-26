@@ -176,6 +176,25 @@ struct WatchFolder: Codable, Equatable, Hashable {
     var subfolders = true
     /// Download files that are only in the cloud (Box Drive, iCloud).
     var download = true
+    /// Extensions to pick up; empty = every audio type except MP4.
+    var types: [String] = []
+
+    /// File types offered in the menu, with their extensions.
+    static let typeGroups: [(name: String, extensions: [String])] = [
+        ("WAV", ["wav", "wave"]),
+        ("AIFF", ["aif", "aiff", "aifc"]),
+        ("MP3", ["mp3"]),
+        ("AAC / M4A", ["m4a", "aac", "alac"]),
+        ("FLAC", ["flac"]),
+        ("OGG", ["ogg", "oga"]),
+        ("CAF", ["caf"]),
+        ("MP4 (audio from video files)", ["mp4"]),
+    ]
+
+    /// What an empty `types` means.
+    static let defaultTypes: [String] = typeGroups.filter { $0.extensions != ["mp4"] }.flatMap(\.extensions)
+
+    var effectiveTypes: [String] { types.isEmpty ? Self.defaultTypes : types }
 
     init(path: String, subfolders: Bool = true, download: Bool = true) {
         self.path = path
@@ -188,6 +207,7 @@ struct WatchFolder: Codable, Equatable, Hashable {
         path = try c.decode(String.self, forKey: .path)
         subfolders = try c.decodeIfPresent(Bool.self, forKey: .subfolders) ?? true
         download = try c.decodeIfPresent(Bool.self, forKey: .download) ?? true
+        types = try c.decodeIfPresent([String].self, forKey: .types) ?? []
     }
 }
 

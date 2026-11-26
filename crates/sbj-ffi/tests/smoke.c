@@ -87,8 +87,11 @@ int main(void) {
     CHECK(sbj_session_set_bank_defaults_json(s, 0, "{\"color\":\"#00ff00\"}") == SBJ_STATUS_OK);
     CHECK(sbj_session_set_bank_defaults_json(s, 999, NULL) != SBJ_STATUS_OK);
     uint32_t changed = 0;
-    CHECK(sbj_session_apply_pad_defaults(s, 0, &changed) == SBJ_STATUS_OK);
-    CHECK(sbj_session_apply_pad_defaults(s, -1, NULL) == SBJ_STATUS_OK);
+    CHECK(sbj_session_bulk_edit_json(s, 0, "{\"fade_out\":2,\"color\":null}", &changed)
+          == SBJ_STATUS_OK);
+    CHECK(sbj_session_bulk_edit_json(s, -1, "{\"loop\":true}", NULL) == SBJ_STATUS_OK);
+    CHECK(sbj_session_bulk_edit_json(s, -1, "{\"output\":99}", NULL) != SBJ_STATUS_OK);
+    CHECK(sbj_session_bulk_edit_json(s, -1, "nope", NULL) == SBJ_STATUS_INVALID_ARGUMENT);
     CHECK(sbj_session_set_bank_defaults_json(s, 0, NULL) == SBJ_STATUS_OK);
     CHECK(sbj_session_set_show_colors_json(s, "[{\"name\":\"Home\",\"value\":\"#c8102e\"}]", true)
           == SBJ_STATUS_OK);

@@ -263,9 +263,15 @@ built-in speakers or headphones)
       by default, or Main). Select several files (⌘-click) → Add to Bank,
       or press Return: pads appear on the bank shown.
 - [ ] Bank tab → right-click → Bank Settings… (or the ⚙︎ on the bank
-      bar): give the bank its own colour for new pads, tick "Also apply
-      to this bank's existing pads", Apply: only that bank's pads change.
-      Show Settings → New pads → "Also apply to every existing pad".
+      bar): give the bank its own colour for new pads; new pads dropped
+      on that bank get it.
+- [ ] Show → Bulk Edit Pads… (⇧⌘B): choose a bank, tick Fade out, set
+      2 s, apply: only that bank's pads change, and only their fade-out.
+      Choose the whole show, tick Colour → Default: every pad goes back
+      to the default colour. Undo reverses each.
+- [ ] Watch Folders → File types: untick MP3 and drop an MP3 and a WAV
+      into the folder: only the WAV is added. Text and video files are
+      never added; MP4 only when ticked.
 - [ ] Box Drive: watch a Box folder with online-only files (☁︎ in the
       Finder). They're added to the library and downloaded within a few
       seconds (the Event Log shows "Downloaded …"). A library file that's

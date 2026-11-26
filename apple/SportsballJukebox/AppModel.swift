@@ -1136,12 +1136,20 @@ final class AppModel: ObservableObject {
         refreshShow(undo: "Bank Settings")
     }
 
-    /// Gives existing pads their bank's settings for new pads (nil = every
-    /// bank).
-    func applyPadDefaults(bank: Int?) {
+    @Published var showingBulkEdit = false
+    /// The scope Bulk Edit opens with (nil = the whole show).
+    var bulkEditBank: Int?
+
+    func openBulkEdit(bank: Int?) {
+        bulkEditBank = bank
+        showingBulkEdit = true
+    }
+
+    /// Changes chosen settings on every pad (bank nil) or one bank's.
+    func bulkEdit(bank: Int?, changes: [String: Any]) {
         var changed = 0
-        report { changed = try session.applyPadDefaults(bank: bank) }
-        refreshShow(undo: "Apply Pad Settings")
+        report { changed = try session.bulkEdit(bank: bank, changes: changes) }
+        refreshShow(undo: "Bulk Edit")
         notices.append(changed == 0 ? "No pads needed changing." : "Updated \(changed) pad\(changed == 1 ? "" : "s").")
         Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 6_000_000_000)

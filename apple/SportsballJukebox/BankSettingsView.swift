@@ -10,7 +10,6 @@ struct BankSettingsView: View {
     @State private var multiplay = true
     @State private var ownDefaults = false
     @State private var defaults = PadDefaults()
-    @State private var applyToPads = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -32,13 +31,15 @@ struct BankSettingsView: View {
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
-            Toggle("Also apply to this bank's existing pads", isOn: $applyToPads)
-            Text("Gives the pads already on this bank these colours, fades, loop, group, output, ducking and level matching when you click Apply. Undo reverses it.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-
             HStack {
+                Button("Bulk Edit This Bank's Pads…") {
+                    let target = bank
+                    dismiss()
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                        model.openBulkEdit(bank: target)
+                    }
+                }
+                .help("Change chosen settings on every pad already on this bank")
                 Spacer()
                 Button("Cancel") { dismiss() }
                     .keyboardShortcut(.cancelAction)
@@ -71,9 +72,6 @@ struct BankSettingsView: View {
         let current: PadDefaults? = model.show.hasOwnDefaults(bank: bank) ? model.show.defaults(forBank: bank) : nil
         if wanted != current {
             model.setBankDefaults(bank: bank, wanted)
-        }
-        if applyToPads {
-            model.applyPadDefaults(bank: bank)
         }
     }
 }

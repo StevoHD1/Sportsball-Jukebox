@@ -244,11 +244,13 @@ final class EngineSession: @unchecked Sendable {
         }
     }
 
-    /// Gives existing pads their bank's settings for new pads (nil = every
-    /// bank). Returns how many changed.
-    func applyPadDefaults(bank: Int?) throws -> Int {
+    /// Changes chosen settings (see sbj_session_bulk_edit_json) on every
+    /// pad (bank nil) or one bank's. Returns how many pads changed.
+    func bulkEdit(bank: Int?, changes: [String: Any]) throws -> Int {
+        let data = try JSONSerialization.data(withJSONObject: changes)
+        let json = String(decoding: data, as: UTF8.self)
         var changed: UInt32 = 0
-        try Engine.check(sbj_session_apply_pad_defaults(handle, Int32(clamping: bank ?? -1), &changed))
+        try Engine.check(sbj_session_bulk_edit_json(handle, Int32(clamping: bank ?? -1), json, &changed))
         return Int(changed)
     }
 

@@ -65,6 +65,19 @@ private struct WatchFolderRow: View {
                 Toggle("Include subfolders", isOn: setting(\.subfolders))
                     .font(.caption)
                     .controlSize(.small)
+                Menu {
+                    ForEach(WatchFolder.typeGroups, id: \.name) { group in
+                        Toggle(group.name, isOn: typeBinding(group.extensions))
+                    }
+                    Divider()
+                    Button("Default (all audio except MP4)") { setTypes([]) }
+                } label: {
+                    Text("File types: \(typesSummary)")
+                        .font(.caption)
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .help("Which kinds of file this folder adds. Text, video and other non-audio files are always ignored.")
                 Toggle("Download online-only files (Box Drive, iCloud)", isOn: setting(\.download))
                     .font(.caption)
                     .controlSize(.small)
@@ -91,6 +104,41 @@ private struct WatchFolderRow: View {
     }
 
     private var missing: Bool { model.isWatchFolderMissing(folder.path) }
+
+    private var typesSummary: String {
+        if folder.types.isEmpty { return "All audio except MP4" }
+        let names = WatchFolder.typeGroups
+            .filter { group in group.extensions.contains { folder.types.contains($0) } }
+            .map { $0.name.components(separatedBy: " ").first ?? $0.name }
+        return names.isEmpty ? "None" : names.joined(separator: ", ")
+    }
+
+    private func typeBinding(_ extensions: [String]) -> Binding<Bool> {
+        Binding(
+            get: { extensions.contains { folder.effectiveTypes.contains($0) } },
+            set: { on in
+                var types = Set(folder.effectiveTypes)
+                if on {
+                    types.formUnion(extensions)
+                } else {
+                    types.subtract(extensions)
+                }
+                // Keep at least one type; the default set is stored as empty.
+                guard !types.isEmpty else { return }
+                let sorted = types.sorted()
+                setTypes(sorted == WatchFolder.defaultTypes.sorted() ? [] : sorted)
+            }
+        )
+    }
+
+    private func setTypes(_ types: [String]) {
+        let folders = model.show.watchFolders.map { f -> WatchFolder in
+            var f = f
+            if f.path == folder.path { f.types = types }
+            return f
+        }
+        model.setWatchFolders(folders)
+    }
 
     private func setting(_ key: WritableKeyPath<WatchFolder, Bool>) -> Binding<Bool> {
         Binding(

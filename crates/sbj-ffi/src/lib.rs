@@ -1150,23 +1150,37 @@ pub unsafe extern "C" fn sbj_session_set_bank_defaults_json(
     }
 }
 
-/// Gives existing pads their page's settings for new pads (colour, fades,
-/// loop, group, output, ducking, level matching): every pad, or with
-/// `bank` >= 0 only that page's. `changed` (may be null) receives how many
-/// pads changed.
+/// Changes chosen settings on every pad (`bank` < 0) or on one bank's
+/// pads. JSON: any of `{"color": string|null, "gain": linear,
+/// "fade_in": s, "fade_out": s|null, "loop": bool, "group": string|null,
+/// "output": index, "duck": dB|null, "level_match": bool,
+/// "retrigger": "restart"|"stop"|"fade", "play_mode": "bank"|"over"|"solo"}`;
+/// fields left out are left alone, `null` clears. `changed` (may be null)
+/// receives how many pads changed.
 ///
 /// # Safety
-/// `session` must be null or a live session; `changed` null or valid.
+/// `session` must be null or a live session; `json` a valid string;
+/// `changed` null or valid.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn sbj_session_apply_pad_defaults(
+pub unsafe extern "C" fn sbj_session_bulk_edit_json(
     session: *const SbjSession,
     bank: i32,
+    json: *const c_char,
     changed: *mut u32,
 ) -> SbjStatus {
     // SAFETY: forwarded caller contract.
+    let changes: sbj_session::PadChanges =
+        match unsafe { required_str(json, "json") }.and_then(|j| {
+            serde_json::from_str(j)
+                .map_err(|e| fail(SbjStatus::InvalidArgument, format!("bad changes: {e}")))
+        }) {
+            Ok(c) => c,
+            Err(status) => return status,
+        };
+    // SAFETY: forwarded caller contract.
     unsafe {
         with_session(session, |s| {
-            match s.lock().apply_pad_defaults(u32::try_from(bank).ok()) {
+            match s.lock().bulk_edit(u32::try_from(bank).ok(), &changes) {
                 Ok(count) => {
                     if !changed.is_null() {
                         // SAFETY: caller contract: null or valid.

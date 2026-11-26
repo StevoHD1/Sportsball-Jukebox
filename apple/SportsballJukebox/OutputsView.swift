@@ -212,7 +212,6 @@ struct ShowSettingsView: View {
     @State private var levelMatchOn = false
     @State private var levelTarget = -16.0
     @State private var padDefaults = PadDefaults()
-    @State private var applyToPads = false
     @State private var playedOn = false
     @State private var playedColor = "#555555"
     @State private var markPlayed = true
@@ -270,11 +269,9 @@ struct ShowSettingsView: View {
             DisclosureGroup("New pads") {
                 VStack(alignment: .leading, spacing: 8) {
                     PadDefaultsEditor(defaults: $padDefaults, outputs: model.show.outputs)
-                    Toggle("Also apply to every existing pad", isOn: $applyToPads)
-                    Text("Gives existing pads these colours, fades, loop, group, output, ducking and level matching when you click Apply. Banks with their own settings (Bank Settings…) get theirs. Undo reverses it.")
+                    Text("To change pads that already exist, use Show → Bulk Edit Pads….")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
                 }
                 .padding(.top, 6)
             }
@@ -320,9 +317,6 @@ struct ShowSettingsView: View {
                     )
                     if padDefaults != (model.show.padDefaults ?? PadDefaults()) {
                         model.setPadDefaults(padDefaults == PadDefaults() ? nil : padDefaults)
-                    }
-                    if applyToPads {
-                        model.applyPadDefaults(bank: nil)
                     }
                     dismiss()
                 }
