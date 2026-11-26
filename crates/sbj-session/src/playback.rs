@@ -73,6 +73,7 @@ impl<B: AudioBackend> Session<B> {
     fn after_start(&mut self, slot: u32, cue: &crate::CueDoc) {
         self.recent_fires.insert(slot, Instant::now());
         self.remember_fire(slot);
+        self.auto_mark_played(slot);
 
         // Exclusive group: hand over from whatever else in the group plays.
         if let Some(group) = cue

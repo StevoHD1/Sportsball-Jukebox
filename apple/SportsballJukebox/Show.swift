@@ -40,6 +40,10 @@ struct ShowDoc: Codable, Equatable {
     var singlePlay: [Int] = []
     /// Named colour presets kept with the show.
     var colors: [ShowColor] = []
+    /// Colour played pads show in; nil = they keep their colour (✓ only).
+    var playedColor: String?
+    /// With a played colour, firing a pad marks it as played.
+    var markPlayed = true
 
     /// The preset with this colour value, if any.
     func preset(for value: String?) -> ShowColor? {
@@ -57,6 +61,8 @@ struct ShowDoc: Codable, Equatable {
         case padDefaults = "pad_defaults"
         case singlePlay = "single_play"
         case colors
+        case playedColor = "played_color"
+        case markPlayed = "mark_played"
     }
 
     /// Global slot numbers of a bank's pads.
@@ -85,6 +91,8 @@ struct ShowDoc: Codable, Equatable {
         padDefaults = try c.decodeIfPresent(PadDefaults.self, forKey: .padDefaults)
         singlePlay = try c.value(.singlePlay, or: [])
         colors = try c.value(.colors, or: [])
+        playedColor = try c.decodeIfPresent(String.self, forKey: .playedColor)
+        markPlayed = try c.value(.markPlayed, or: true)
         outputs = try c.value(.outputs, or: outputs)
         cues = try c.value(.cues, or: cues)
     }
@@ -683,6 +691,8 @@ struct SessionStatus: Decodable, Equatable {
     var last: Int?
     /// Banks with Multiplay off.
     var singlePlay: [Int]
+    /// Pads marked as played this game.
+    var played: [Int]
     var previewOutput: Int?
     var preview: PreviewInfo?
     var bank: Int

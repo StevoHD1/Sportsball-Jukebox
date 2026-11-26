@@ -212,6 +212,9 @@ struct ShowSettingsView: View {
     @State private var levelMatchOn = false
     @State private var levelTarget = -16.0
     @State private var padDefaults = PadDefaults()
+    @State private var playedOn = false
+    @State private var playedColor = "#555555"
+    @State private var markPlayed = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -246,6 +249,22 @@ struct ShowSettingsView: View {
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+            }
+            DisclosureGroup("Played pads") {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Toggle("Show played pads in", isOn: $playedOn)
+                        PlayedColourPicker(value: $playedColor)
+                            .disabled(!playedOn)
+                    }
+                    Toggle("Mark pads as played when they fire", isOn: $markPlayed)
+                        .disabled(!playedOn)
+                    Text("Played pads show a ✓ (and this colour), so you can see what's been used this game. Right-click a pad to mark or unmark it; Reset Played on the bank bar clears the page.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(.top, 6)
             }
             DisclosureGroup("New pads") {
                 PadDefaultsEditor(defaults: $padDefaults, outputs: model.show.outputs)
@@ -287,7 +306,9 @@ struct ShowSettingsView: View {
                         columns: columns,
                         banks: banks.map(\.name),
                         stopAllFade: stopAllFade,
-                        levelMatch: levelMatchOn ? levelTarget : nil
+                        levelMatch: levelMatchOn ? levelTarget : nil,
+                        playedColor: playedOn ? playedColor : nil,
+                        markPlayed: markPlayed
                     )
                     if padDefaults != (model.show.padDefaults ?? PadDefaults()) {
                         model.setPadDefaults(padDefaults == PadDefaults() ? nil : padDefaults)
@@ -311,6 +332,9 @@ struct ShowSettingsView: View {
                 levelTarget = target
             }
             padDefaults = model.show.padDefaults ?? PadDefaults()
+            playedOn = model.show.playedColor != nil
+            playedColor = model.show.playedColor ?? "#555555"
+            markPlayed = model.show.markPlayed
         }
     }
 }
@@ -432,5 +456,42 @@ private struct PadDefaultsEditor: View {
             get: { Double(defaults.duck ?? -12) },
             set: { defaults.duck = Float($0.rounded()) }
         )
+    }
+}
+
+/// A colour for played pads: show presets, standard colours, or any.
+private struct PlayedColourPicker: View {
+    @EnvironmentObject private var model: AppModel
+    @Binding var value: String
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Menu {
+                if !model.show.colors.isEmpty {
+                    Section("Show colours") {
+                        ForEach(model.show.colors, id: \.self) { preset in
+                            Button(preset.name) { value = preset.value }
+                        }
+                    }
+                }
+                Section("Standard") {
+                    Button("Dark grey") { value = "#555555" }
+                    ForEach(PadColor.allCases, id: \.self) { preset in
+                        Button(preset.rawValue.capitalized) { value = preset.rawValue }
+                    }
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(nsImage: PadColor.swatch(PadColor.color(named: value)))
+                    Text(model.show.preset(for: value)?.name ?? (PadColor(rawValue: value)?.rawValue.capitalized ?? value))
+                }
+            }
+            .fixedSize()
+            ColorPicker("Played colour", selection: Binding(
+                get: { PadColor.color(named: value) },
+                set: { if let hex = PadColor.hex($0) { value = hex } }
+            ), supportsOpacity: false)
+            .labelsHidden()
+        }
     }
 }

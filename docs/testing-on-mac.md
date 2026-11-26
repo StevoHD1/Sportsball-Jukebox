@@ -306,7 +306,13 @@ built-in speakers or headphones)
       on: every pad using it changes. Save, open the show on another Mac:
       the presets are there.
 - [ ] A custom-coloured pad looks the same colour as its swatch in the
-      Colour menu (not darker).
+      Colour menu (not darker). A playing pad keeps its colour with a white
+      border.
+- [ ] Show Settings → Played pads: turn on "Show played pads in" with a
+      colour. Fire pads: when they finish they show that colour and a ✓.
+      Right-click → Unmark as Played / Mark as Played. "Reset Played" on
+      the bank bar clears the page; Show → Reset Played on All Pages clears
+      everything. The phone remote shows played pads too.
 
 **Stress**
 - [ ] Leave a looping cue running for 10+ minutes. The status line should

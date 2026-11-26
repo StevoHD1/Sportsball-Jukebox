@@ -35,6 +35,7 @@ pub mod control;
 mod library;
 pub mod log;
 mod playback;
+mod played;
 mod playlist;
 mod preview;
 mod remote;
@@ -365,6 +366,8 @@ pub struct Session<B: AudioBackend> {
     scheduled_fires: Vec<(Instant, u32)>,
     /// How deep pad actions are nested (A fires B fires C), to stop loops.
     action_depth: u8,
+    /// Pads marked as played this game (not saved with the show).
+    played: std::collections::BTreeSet<u32>,
     playlists: HashMap<u32, playlist::PlaylistState>,
     /// The pad being previewed, and on which output.
     previewing: Option<(u32, usize)>,
@@ -405,6 +408,7 @@ impl<B: AudioBackend> Session<B> {
             timed_ducks: Vec::new(),
             scheduled_fires: Vec::new(),
             action_depth: 0,
+            played: std::collections::BTreeSet::new(),
             playlists: HashMap::new(),
             previewing: None,
             previewing_file: None,
@@ -461,6 +465,7 @@ impl<B: AudioBackend> Session<B> {
         self.standby = self.pad_step_from(0);
         self.learning = None;
         self.dirty = false;
+        self.played.clear();
         self.reset_undo();
         self.outputs = (0..self.show.outputs.len())
             .map(|_| OutputRuntime::default())
@@ -1014,6 +1019,7 @@ impl<B: AudioBackend> Session<B> {
             return Err(SessionError::InvalidCue(slot));
         }
         let before = self.reach(&[slot]);
+        self.played.remove(&slot);
         self.show.cues.retain(|c| c.slot != slot);
         self.dirty = true;
         self.load_cue(slot);
@@ -1053,6 +1059,7 @@ impl<B: AudioBackend> Session<B> {
     /// Rewrites the pads that Fire/StopPad markers act on; returns the
     /// slots of the cues whose markers changed.
     fn remap_pads(&mut self, map: impl Fn(u32) -> u32) -> Vec<u32> {
+        self.played = self.played.iter().map(|&slot| map(slot)).collect();
         for item in &mut self.show.rundown {
             item.pad = item.pad.map(&map);
         }

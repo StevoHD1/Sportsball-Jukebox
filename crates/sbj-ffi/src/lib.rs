@@ -570,6 +570,7 @@ pub unsafe extern "C" fn sbj_session_status_json(session: *const SbjSession) -> 
                 "preview": preview,
                 "bank": session.current_bank(),
                 "standby": session.standby(),
+                "played": session.played(),
                 "undo": session.undo_label(),
                 "redo": session.redo_label(),
                 "last": session.last_playing(),
@@ -786,6 +787,11 @@ pub unsafe extern "C" fn sbj_session_set_show_settings_json(
         /// Absent: unchanged; null: off; a number: target LUFS.
         #[serde(default)]
         level_match: Option<serde_json::Value>,
+        /// Absent: unchanged; null: off; a string: colour of played pads.
+        #[serde(default)]
+        played_color: Option<serde_json::Value>,
+        #[serde(default)]
+        mark_played: Option<bool>,
     }
     // SAFETY: forwarded caller contract.
     let settings: Settings = match unsafe { required_str(json, "json") }.and_then(|j| {
@@ -804,6 +810,14 @@ pub unsafe extern "C" fn sbj_session_set_show_settings_json(
             }
             if let Some(level) = &settings.level_match {
                 session.set_level_match(level.as_f64());
+            }
+            if settings.played_color.is_some() || settings.mark_played.is_some() {
+                let color = match &settings.played_color {
+                    Some(value) => value.as_str().map(str::to_owned),
+                    None => session.show().played_color.clone(),
+                };
+                let mark = settings.mark_played.unwrap_or(session.show().mark_played);
+                session.set_played_style(color, mark);
             }
             session_status(session.set_show_settings(
                 &settings.name,
@@ -939,6 +953,43 @@ pub unsafe extern "C" fn sbj_session_step_standby(
     unsafe {
         with_session(session, |s| {
             s.lock().step_standby(forward);
+            SbjStatus::Ok
+        })
+    }
+}
+
+/// Marks (`played`) or unmarks a pad as played (status JSON "played").
+///
+/// # Safety
+/// `session` must be null or a live session.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sbj_session_set_played(
+    session: *const SbjSession,
+    slot: u32,
+    played: bool,
+) -> SbjStatus {
+    // SAFETY: forwarded caller contract.
+    unsafe {
+        with_session(session, |s| {
+            s.lock().set_played(slot, played);
+            SbjStatus::Ok
+        })
+    }
+}
+
+/// Unmarks every pad in `bank` (0-based) as played; negative = all banks.
+///
+/// # Safety
+/// `session` must be null or a live session.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sbj_session_reset_played(
+    session: *const SbjSession,
+    bank: i32,
+) -> SbjStatus {
+    // SAFETY: forwarded caller contract.
+    unsafe {
+        with_session(session, |s| {
+            s.lock().reset_played(u32::try_from(bank).ok());
             SbjStatus::Ok
         })
     }

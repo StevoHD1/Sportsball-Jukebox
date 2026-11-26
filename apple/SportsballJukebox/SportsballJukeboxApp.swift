@@ -32,6 +32,8 @@ struct SportsballJukeboxApp: App {
                     .keyboardShortcut("m", modifiers: [.command, .shift])
                 Button("Show Settings…") { model.showingSettings = true }
                 Button("Colour Presets…") { model.showingColours = true }
+                Button("Reset Played on This Page") { model.resetPlayed(bank: model.currentBank) }
+                Button("Reset Played on All Pages") { model.resetPlayed(bank: nil) }
                 Button(model.showingLibrary ? "Hide Library" : "Show Library") {
                     model.showingLibrary.toggle()
                 }

@@ -84,6 +84,7 @@ impl<B: AudioBackend> Session<B> {
                 "holding": state.holding,
                 "progress": progress,
                 "remaining": remaining,
+                "played": self.played.contains(&slot),
             }))
         };
 
@@ -133,6 +134,7 @@ impl<B: AudioBackend> Session<B> {
             "pads": pads,
             "playing": playing,
             "last_control": self.last_control,
+            "played_color": self.show.played_color,
             "last": self.last_playing().and_then(|slot| self.show.cue(slot)).map(|c| c.title.clone()),
         })
     }

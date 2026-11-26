@@ -158,7 +158,7 @@ final class EngineSession: @unchecked Sendable {
 
     func setShowSettings(
         name: String, slots: Int, columns: Int, banks: [String], stopAllFade: Double,
-        levelMatch: Double?
+        levelMatch: Double?, playedColor: String?, markPlayed: Bool
     ) throws {
         struct Settings: Encodable {
             let name: String
@@ -168,11 +168,16 @@ final class EngineSession: @unchecked Sendable {
             let stopAllFade: Double
             /// Always written: null turns level matching off.
             let levelMatch: Double?
+            /// Always written: null turns the played colour off.
+            let playedColor: String?
+            let markPlayed: Bool
 
             enum CodingKeys: String, CodingKey {
                 case name, slots, columns, banks
                 case stopAllFade = "stop_all_fade"
                 case levelMatch = "level_match"
+                case playedColor = "played_color"
+                case markPlayed = "mark_played"
             }
 
             func encode(to encoder: Encoder) throws {
@@ -183,11 +188,13 @@ final class EngineSession: @unchecked Sendable {
                 try c.encode(banks, forKey: .banks)
                 try c.encode(stopAllFade, forKey: .stopAllFade)
                 try c.encode(levelMatch, forKey: .levelMatch)
+                try c.encode(playedColor, forKey: .playedColor)
+                try c.encode(markPlayed, forKey: .markPlayed)
             }
         }
         let json = try ShowDoc.encode(Settings(
             name: name, slots: slots, columns: columns, banks: banks, stopAllFade: stopAllFade,
-            levelMatch: levelMatch
+            levelMatch: levelMatch, playedColor: playedColor, markPlayed: markPlayed
         ))
         try Engine.check(sbj_session_set_show_settings_json(handle, json))
     }
@@ -211,6 +218,17 @@ final class EngineSession: @unchecked Sendable {
     /// Slow: copies every file the show uses beside `url` and saves there.
     func saveWithAudio(to url: URL) throws {
         try Engine.check(sbj_session_save_with_audio(handle, url.path))
+    }
+
+    // MARK: Played marks
+
+    func setPlayed(slot: Int, _ played: Bool) {
+        _ = sbj_session_set_played(handle, UInt32(clamping: slot), played)
+    }
+
+    /// nil = every bank.
+    func resetPlayed(bank: Int?) {
+        _ = sbj_session_reset_played(handle, Int32(clamping: bank ?? -1))
     }
 
     // MARK: Colour presets

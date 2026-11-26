@@ -365,6 +365,15 @@ private struct BankBar: View {
                 .accessibilityAddTraits(index == model.currentBank ? .isSelected : [])
             }
             Spacer()
+            if model.playedOnThisBank > 0 {
+                Button {
+                    model.resetPlayed(bank: model.currentBank)
+                } label: {
+                    Label("Reset Played (\(model.playedOnThisBank))", systemImage: "arrow.counterclockwise")
+                }
+                .controlSize(.small)
+                .help("Unmark this page's pads as played")
+            }
             Toggle("Multiplay", isOn: multiplay)
                 .toggleStyle(.switch)
                 .controlSize(.small)

@@ -98,6 +98,8 @@ struct CueButton: View {
                 cue: cue,
                 image: cue.flatMap { model.padImage(for: $0) },
                 height: height,
+                played: model.isPlayed(slot),
+                playedColor: model.show.playedColor,
                 state: state,
                 hasProblems: !problems.isEmpty,
                 isBusy: isBusy
@@ -152,6 +154,7 @@ struct CueButton: View {
         }
         if let key = cue?.hotkey { parts.append("Key \(key.uppercased())") }
         if cue?.hasActions == true { parts.append("Has actions") }
+        if model.isPlayed(slot) { parts.append("Played") }
         if !problems.isEmpty { parts.append("Has problems") }
         return parts.joined(separator: ", ")
     }
@@ -179,6 +182,9 @@ struct CueButton: View {
         if let cue {
             Button("Edit Pad…") { model.editing = EditTarget(id: slot) }
             Button("Add to Rundown") { model.addToRundown(pad: slot) }
+            Button(model.isPlayed(slot) ? "Unmark as Played" : "Mark as Played") {
+                model.setPlayed(slot, !model.isPlayed(slot))
+            }
             Button("Preview in Headphones (⌥-click)") { model.preview(slot) }
                 .disabled(!model.canPreview)
             if cue.playlist != nil {
@@ -220,6 +226,9 @@ private struct PadFace: View {
     let cue: CueDoc?
     let image: NSImage?
     let height: CGFloat
+    /// Marked as played (shown in the played colour, with a ✓).
+    let played: Bool
+    let playedColor: String?
     let state: CueStatus
     let hasProblems: Bool
     let isBusy: Bool
@@ -308,6 +317,11 @@ private struct PadFace: View {
                     .background(Color.orange, in: Capsule())
                     .foregroundStyle(.black)
             }
+            if played {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.caption)
+                    .accessibilityLabel("Played")
+            }
             if cue?.hasActions == true {
                 // Plays over / solo, or runs actions when fired.
                 Image(systemName: "bolt.fill")
@@ -358,6 +372,9 @@ private struct PadFace: View {
 
     private var background: Color {
         guard let cue else { return Color.secondary.opacity(0.12) }
+        if played, !state.playing, let playedColor {
+            return PadColor.color(named: playedColor)
+        }
         let base = PadColor.color(named: cue.color)
         // Ready pads show their exact colour (so it can be matched); pads
         // that can't play are faded.

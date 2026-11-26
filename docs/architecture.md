@@ -525,6 +525,15 @@ colours already used in the show. Changing a preset's colour can
 recolour every pad (and the new-pad default) using it
 (`set_show_colors(…, recolor)`).
 
+**Played pads** (`played.rs`): the session keeps which pads have been
+used this game (not saved with the show, so firing doesn't make the
+show "edited" or fill the undo history; cleared when a show opens).
+With a played colour set in the show (`played_color`), pads are marked
+as they fire (`mark_played`, on by default), however they're fired, and
+show in that colour with a ✓ when not playing. Marks can be set by hand,
+follow pads that move, and reset per page or for all pages. The remote
+shows them too.
+
 ## Play log (Phase 7)
 
 `sbj-session/src/log.rs` records each time a pad or playlist song starts:

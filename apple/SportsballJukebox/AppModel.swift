@@ -364,12 +364,12 @@ final class AppModel: ObservableObject {
 
     func applySettings(
         name: String, slots: Int, columns: Int, banks: [String], stopAllFade: Double,
-        levelMatch: Double?
+        levelMatch: Double?, playedColor: String?, markPlayed: Bool
     ) {
         report {
             try session.setShowSettings(
                 name: name, slots: slots, columns: columns, banks: banks, stopAllFade: stopAllFade,
-                levelMatch: levelMatch
+                levelMatch: levelMatch, playedColor: playedColor, markPlayed: markPlayed
             )
         }
         // The gain level matching would apply depends on the target.
@@ -493,6 +493,29 @@ final class AppModel: ObservableObject {
                 self.refreshShow()
             }
         }
+    }
+
+    // MARK: - Played marks
+
+    func isPlayed(_ slot: Int) -> Bool {
+        status?.played.contains(slot) ?? false
+    }
+
+    func setPlayed(_ slot: Int, _ played: Bool) {
+        session.setPlayed(slot: slot, played)
+        refreshStatus()
+    }
+
+    /// The bank shown, or (nil) every bank.
+    func resetPlayed(bank: Int?) {
+        session.resetPlayed(bank: bank)
+        refreshStatus()
+    }
+
+    /// Played pads on the bank shown.
+    var playedOnThisBank: Int {
+        let range = show.padRange(bank: currentBank)
+        return (status?.played ?? []).filter { range.contains($0) }.count
     }
 
     // MARK: - Colour presets

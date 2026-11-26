@@ -129,6 +129,13 @@ pub struct Show {
     /// Named colour presets for pads ("Home red" = "#C8102E").
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub colors: Vec<ShowColor>,
+    /// Colour played pads show in ("#RRGGBB" or a colour name); `None` =
+    /// played pads keep their colour (a ✓ still marks them).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub played_color: Option<String>,
+    /// With a played colour set, mark pads as played when they fire.
+    #[serde(default = "yes", skip_serializing_if = "is_true")]
+    pub mark_played: bool,
 }
 
 /// A named pad colour kept with the show.
@@ -298,6 +305,8 @@ impl Default for Show {
             pad_defaults: None,
             single_play: Vec::new(),
             colors: Vec::new(),
+            played_color: None,
+            mark_played: true,
         }
     }
 }
