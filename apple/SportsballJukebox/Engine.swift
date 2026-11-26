@@ -231,6 +231,17 @@ final class EngineSession: @unchecked Sendable {
         _ = sbj_session_reset_played(handle, Int32(clamping: bank ?? -1))
     }
 
+    // MARK: Diagnostics
+
+    func events() -> [EventEntry] {
+        guard let json = Engine.take(sbj_session_events_json(handle)) else { return [] }
+        return EventEntry.decodeList(json)
+    }
+
+    func resetGlitches() {
+        _ = sbj_session_reset_glitches(handle)
+    }
+
     // MARK: Colour presets
 
     func setShowColors(_ colors: [ShowColor], recolor: Bool) throws {

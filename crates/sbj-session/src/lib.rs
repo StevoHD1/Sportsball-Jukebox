@@ -32,6 +32,7 @@ use sbj_media::MediaError;
 mod actions;
 mod collect;
 pub mod control;
+mod diagnostics;
 mod library;
 pub mod log;
 mod playback;
@@ -41,6 +42,7 @@ mod preview;
 mod remote;
 mod rundown;
 mod transport;
+pub use diagnostics::EventEntry;
 mod undo;
 pub use collect::CollectPlan;
 pub use library::LibraryEntry;
@@ -313,6 +315,10 @@ struct OutputRuntime<S> {
     on_backup: bool,
     error: Option<String>,
     retry_at: Option<Instant>,
+    /// Glitches already logged.
+    seen_xruns: u64,
+    /// Glitches before the count was last reset.
+    glitch_offset: u64,
 }
 
 impl<S> Default for OutputRuntime<S> {
@@ -322,6 +328,8 @@ impl<S> Default for OutputRuntime<S> {
             on_backup: false,
             error: None,
             retry_at: None,
+            seen_xruns: 0,
+            glitch_offset: 0,
         }
     }
 }
@@ -368,6 +376,8 @@ pub struct Session<B: AudioBackend> {
     action_depth: u8,
     /// Pads marked as played this game (not saved with the show).
     played: std::collections::BTreeSet<u32>,
+    /// Recent events (see `diagnostics`).
+    events: std::collections::VecDeque<EventEntry>,
     playlists: HashMap<u32, playlist::PlaylistState>,
     /// The pad being previewed, and on which output.
     previewing: Option<(u32, usize)>,
@@ -409,6 +419,7 @@ impl<B: AudioBackend> Session<B> {
             scheduled_fires: Vec::new(),
             action_depth: 0,
             played: std::collections::BTreeSet::new(),
+            events: std::collections::VecDeque::new(),
             playlists: HashMap::new(),
             previewing: None,
             previewing_file: None,
@@ -470,6 +481,21 @@ impl<B: AudioBackend> Session<B> {
         self.outputs = (0..self.show.outputs.len())
             .map(|_| OutputRuntime::default())
             .collect();
+        if let Some(path) = &self.show_path {
+            let message = format!("Opened \"{}\" ({}).", self.show.name, path.display());
+            self.log_event("info", "show", message);
+        }
+        if !self.file_errors.is_empty() {
+            let mut files: Vec<String> = self.file_errors.keys().cloned().collect();
+            files.sort();
+            let message = format!(
+                "{} audio file{} couldn't be loaded: {}",
+                files.len(),
+                if files.len() == 1 { "" } else { "s" },
+                files.join(", ")
+            );
+            self.log_event("error", "show", message);
+        }
         self.open_outputs();
     }
 
@@ -478,7 +504,14 @@ impl<B: AudioBackend> Session<B> {
     }
 
     pub fn save_show(&mut self, path: &Path) -> Result<()> {
-        self.show.save(path)?;
+        if let Err(e) = self.show.save(path) {
+            self.log_event(
+                "error",
+                "show",
+                format!("Couldn't save {}: {e}", path.display()),
+            );
+            return Err(e.into());
+        }
         self.show_path = Some(path.to_path_buf());
         self.dirty = false;
         Ok(())
@@ -768,6 +801,7 @@ impl<B: AudioBackend> Session<B> {
         if self.previewing.is_some_and(|(_, o)| o == index) {
             self.previewing = None;
         }
+        let previous_error = self.outputs[index].error.take();
         self.outputs[index] = OutputRuntime::default();
         self.loaded.retain(|_, l| l.output != index);
 
@@ -776,11 +810,23 @@ impl<B: AudioBackend> Session<B> {
         for (device, is_backup) in self.candidates(&doc) {
             match self.start_stream(&device) {
                 Ok(live) => {
+                    let config = live.config;
                     let output = &mut self.outputs[index];
                     output.live = Some(live);
                     output.on_backup = is_backup;
+                    self.log_event(
+                        "info",
+                        "device",
+                        format!(
+                            "Output \"{}\" is playing through \"{}\" ({:.1} kHz, {} channels).",
+                            doc.name,
+                            device.name,
+                            f64::from(config.sample_rate) / 1000.0,
+                            config.channels
+                        ),
+                    );
                     if is_backup {
-                        self.notices.push(format!(
+                        self.notify(format!(
                             "Output \"{}\" is using backup device \"{}\".",
                             doc.name, device.name
                         ));
@@ -800,8 +846,17 @@ impl<B: AudioBackend> Session<B> {
                 Err(e) => last_error = Some(format!("{}: {e}", device.name)),
             }
         }
+        let error = last_error.unwrap_or_else(|| "no audio device available".into());
+        // Retries happen every couple of seconds: log only changes.
+        if previous_error.as_deref() != Some(error.as_str()) {
+            self.log_event(
+                "error",
+                "device",
+                format!("Output \"{}\" has no device: {error}", doc.name),
+            );
+        }
         let output = &mut self.outputs[index];
-        output.error = Some(last_error.unwrap_or_else(|| "no audio device available".into()));
+        output.error = Some(error);
         output.retry_at = Some(Instant::now() + self.retry_interval);
         false
     }
@@ -827,7 +882,11 @@ impl<B: AudioBackend> Session<B> {
                     device_name: Some(live.device.name.clone()),
                     sample_rate: live.config.sample_rate,
                     channels: live.config.channels,
-                    xruns: live.stream.status().xruns(),
+                    xruns: live
+                        .stream
+                        .status()
+                        .xruns()
+                        .saturating_sub(rt.glitch_offset),
                     error: None,
                 },
                 None => OutputState {
@@ -1200,7 +1259,16 @@ impl<B: AudioBackend> Session<B> {
         if slot >= self.show.total_slots() {
             return Err(SessionError::InvalidCue(slot));
         }
-        self.fire(slot)
+        let result = self.fire(slot);
+        if let Err(e) = &result {
+            let title = self
+                .show
+                .cue(slot)
+                .map(|c| c.title.clone())
+                .unwrap_or_default();
+            self.log_event("error", "fire", format!("Couldn't fire \"{title}\": {e}"));
+        }
+        result
     }
 
     /// Plays a cue from `seconds` into its timeline.
@@ -1316,6 +1384,7 @@ impl<B: AudioBackend> Session<B> {
             live.controller.collect_garbage();
         }
         self.handle_marker_events(&reached);
+        self.check_glitches();
         self.run_scheduled_fires();
         self.log.source = "auto";
         self.advance_playlists();
@@ -1336,7 +1405,7 @@ impl<B: AudioBackend> Session<B> {
                         && self.open_output(index)
                     {
                         let state = &self.outputs_state()[index];
-                        self.notices.push(format!(
+                        self.notify(format!(
                             "Output \"{}\" is back on \"{}\".",
                             state.name,
                             state.device_name.as_deref().unwrap_or("?")
@@ -1376,11 +1445,11 @@ impl<B: AudioBackend> Session<B> {
                 .live
                 .as_ref()
                 .map_or_else(String::new, |l| l.device.name.clone());
-            self.notices.push(format!(
+            self.notify(format!(
                 "Output \"{name}\" lost \"{lost}\"; now playing on \"{now_on}\"."
             ));
         } else {
-            self.notices.push(format!(
+            self.notify(format!(
                 "Output \"{name}\" lost \"{lost}\" and no other device is available. Retrying…"
             ));
         }

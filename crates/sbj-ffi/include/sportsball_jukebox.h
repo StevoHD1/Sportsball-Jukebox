@@ -151,6 +151,16 @@ SbjStatus sbj_session_set_played(const SbjSession *session, uint32_t slot, bool 
 /* bank 0-based; negative = every bank. */
 SbjStatus sbj_session_reset_played(const SbjSession *session, int32_t bank);
 
+/* ---- Diagnostics ------------------------------------------------------- */
+
+/* Event log, oldest first (the last 500; also appended to
+ * <log dir>/events-YYYY-MM-DD.jsonl): [{"time": unix seconds,
+ * "level": "info"|"warning"|"error", "kind": "glitch"|"device"|"fire"|
+ * "show"|"notice", "message": string}]. Free with sbj_string_free. */
+char *sbj_session_events_json(const SbjSession *session);
+/* Zero every output's glitch count ("xruns" in the status JSON). */
+SbjStatus sbj_session_reset_glitches(const SbjSession *session);
+
 /* Move a playing pad's playhead (scrubbing); no-op if it isn't playing. */
 SbjStatus sbj_session_seek_cue(const SbjSession *session, uint32_t slot, double seconds);
 /* Fade out (over its own fade-out) or stop the most recently fired pad

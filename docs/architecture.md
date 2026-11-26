@@ -553,6 +553,30 @@ The Game Log window shows recent plays, totals per song (for music
 licensing returns) and per sponsor (for sponsorship fulfilment), and
 exports CSV with local dates and times.
 
+**Event log** (`diagnostics.rs`): what went wrong, and when. Each entry
+has a time, a level (`info`, `warning`, `error`), a kind (`glitch`,
+`device`, `fire`, `show`, `notice`) and a message. Logged:
+
+- glitches (audio xruns counted by the backend's `StreamStatus`): `poll`
+  compares each output's count with the last one it saw and logs the
+  new ones, naming the output, the device and the pads playing on it;
+- outputs opening on a device (with rate and channels), failing to find
+  one (only when the error changes, not on every retry), losing their
+  device and switching to the backup;
+- pads that fail to fire, audio files that couldn't be loaded when a
+  show opens, and failed saves;
+- every operator notice (`notify` both queues the notice and logs it).
+
+The last 500 events stay in memory (`sbj_session_events_json`); all of
+them are appended to `<log dir>/events-YYYY-MM-DD.jsonl`. Resetting the
+glitch count (`sbj_session_reset_glitches`) stores an offset per output,
+so the status JSON's `xruns` counts from zero while the log keeps the
+history. The Event Log window (Show → Event Log…, ⇧⌘E, or click an
+output's status in the header) lists them, filters problems or
+glitches, resets the count and copies a diagnostics report (Mac model,
+macOS and app versions, outputs, devices, recent events) for bug
+reports.
+
 ## Performance
 
 `cargo run --release -p sbj-engine --example bench` renders 30 s in

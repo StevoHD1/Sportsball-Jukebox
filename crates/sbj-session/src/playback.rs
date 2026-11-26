@@ -150,8 +150,7 @@ impl<B: AudioBackend> Session<B> {
                         self.stop_cue(pad, fade)
                     };
                     if let Err(e) = result {
-                        self.notices
-                            .push(format!("Marker \"{name}\" could not act on its pad: {e}"));
+                        self.notify(format!("Marker \"{name}\" could not act on its pad: {e}"));
                     }
                 }
                 _ => {}

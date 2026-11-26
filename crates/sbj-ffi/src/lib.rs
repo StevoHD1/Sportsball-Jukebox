@@ -995,6 +995,40 @@ pub unsafe extern "C" fn sbj_session_reset_played(
     }
 }
 
+/// The event log as JSON, oldest first: `[{"time": unix seconds,
+/// "level": "info"|"warning"|"error", "kind": string, "message": string}]`
+/// (glitches with what was playing, device changes, failed fires,
+/// warnings). Null on failure. Free with `sbj_string_free`.
+///
+/// # Safety
+/// `session` must be null or a live session.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sbj_session_events_json(session: *const SbjSession) -> *mut c_char {
+    // SAFETY: forwarded caller contract.
+    unsafe {
+        session_string(session, |s| {
+            let session = s.lock();
+            Ok(serde_json::to_string(session.events()).unwrap_or_else(|_| "[]".into()))
+        })
+    }
+}
+
+/// Starts every output's glitch count again from zero (the event log
+/// keeps the history).
+///
+/// # Safety
+/// `session` must be null or a live session.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sbj_session_reset_glitches(session: *const SbjSession) -> SbjStatus {
+    // SAFETY: forwarded caller contract.
+    unsafe {
+        with_session(session, |s| {
+            s.lock().reset_glitches();
+            SbjStatus::Ok
+        })
+    }
+}
+
 /// Moves the preview's playhead to `seconds`, playing it again if it had
 /// stopped (the preview player's scrub bar).
 ///

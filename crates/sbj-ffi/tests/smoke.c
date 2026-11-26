@@ -72,6 +72,12 @@ int main(void) {
     CHECK(sbj_session_set_played(s, 3, true) == SBJ_STATUS_OK);
     CHECK(sbj_session_reset_played(s, 0) == SBJ_STATUS_OK);
     CHECK(sbj_session_reset_played(s, -1) == SBJ_STATUS_OK);
+    CHECK(sbj_session_reset_glitches(s) == SBJ_STATUS_OK);
+    CHECK(sbj_session_reset_glitches(NULL) != SBJ_STATUS_OK);
+    char *events = sbj_session_events_json(s);
+    CHECK(events != NULL && events[0] == '[');
+    sbj_string_free(events);
+    CHECK(sbj_session_events_json(NULL) == NULL);
     CHECK(sbj_session_set_bank_multiplay(s, 0, false) == SBJ_STATUS_OK);
     CHECK(sbj_session_set_bank_multiplay(s, 0, true) == SBJ_STATUS_OK);
     CHECK(sbj_session_set_pad_defaults_json(s, "{\"color\":\"#ff0000\",\"fade_in\":0.5}")

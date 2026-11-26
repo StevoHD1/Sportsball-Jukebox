@@ -61,8 +61,7 @@ impl<B: AudioBackend> Session<B> {
                     } else {
                         self.log.source = "action";
                         if let Err(e) = self.fire_cue(pad) {
-                            self.notices
-                                .push(format!("\"{}\" could not fire its pad: {e}", cue.title));
+                            self.notify(format!("\"{}\" could not fire its pad: {e}", cue.title));
                         }
                         self.log.source = source;
                     }

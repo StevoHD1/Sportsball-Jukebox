@@ -313,6 +313,16 @@ built-in speakers or headphones)
       Right-click → Unmark as Played / Mark as Played. "Reset Played" on
       the bank bar clears the page; Show → Reset Played on All Pages clears
       everything. The phone remote shows played pads too.
+- [ ] Show → Event Log… (⇧⌘E): it lists the outputs opening on their
+      devices. Unplug the output device: the loss and the switch to the
+      backup appear with times. Clicking an output's status in the header
+      opens the log too.
+- [ ] Event Log → Copy Diagnostics, paste into a text editor: it shows
+      the Mac model, macOS version, app version, outputs, devices and
+      recent events. Open Log Folder shows an `events-…jsonl` file.
+- [ ] If the header ever shows glitches, the Event Log says when, on
+      which output and what was playing. Reset Glitch Count clears the
+      header but keeps the entries.
 
 **Stress**
 - [ ] Leave a looping cue running for 10+ minutes. The status line should

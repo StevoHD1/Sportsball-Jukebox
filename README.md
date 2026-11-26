@@ -18,6 +18,8 @@ support for several audio interfaces at once.
   per-pad fades;
 - a Now Playing panel and headphone preview;
 - a game log with song and sponsor totals;
+- an event log of glitches, device problems and warnings, with a
+  "Copy Diagnostics" report for bug reports;
 - a phone/tablet remote served by the app over the local network;
 - level matching (EBU R128) so every pad plays at the same loudness, and
   automatic trimming of silence at the start of dropped files;

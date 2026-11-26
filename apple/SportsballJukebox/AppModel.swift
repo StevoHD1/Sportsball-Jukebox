@@ -47,6 +47,7 @@ final class AppModel: ObservableObject {
     @Published var showingControls = false
     @Published var showingPreflight = false
     @Published var showingLog = false
+    @Published var showingEvents = false
     @Published var showingRundown: Bool = UserDefaults.standard.bool(forKey: "showRundown") {
         didSet {
             UserDefaults.standard.set(showingRundown, forKey: "showRundown")
@@ -793,6 +794,63 @@ final class AppModel: ObservableObject {
 
     func clearLog() {
         session.clearLog()
+    }
+
+    // MARK: - Event log
+
+    func events() -> [EventEntry] {
+        session.events()
+    }
+
+    func resetGlitches() {
+        session.resetGlitches()
+        refreshStatus()
+    }
+
+    /// Plain text for a bug report: this Mac, the app, the devices and
+    /// outputs, and recent events.
+    func diagnosticsReport(events: [EventEntry]) -> String {
+        var size = 0
+        sysctlbyname("hw.model", nil, &size, nil, 0)
+        var hwModel = [CChar](repeating: 0, count: max(size, 1))
+        sysctlbyname("hw.model", &hwModel, &size, nil, 0)
+        let mac = String(decoding: hwModel.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
+        let info = Bundle.main.infoDictionary ?? [:]
+        let version = info["CFBundleShortVersionString"] as? String ?? "?"
+        let build = info["CFBundleVersion"] as? String ?? "?"
+        let process = ProcessInfo.processInfo
+
+        var lines = [
+            "Sportsball Jukebox \(version) (\(build))",
+            "Mac: \(mac), \(process.processorCount) cores, \(process.physicalMemory / 1_073_741_824) GB",
+            "macOS: \(process.operatingSystemVersionString)",
+            "Show: \(show.name), \(show.cues.count) pads",
+            "",
+            "Outputs:",
+        ]
+        for output in status?.outputs ?? [] {
+            var line = "  \(output.name): \(output.status)"
+            if let device = output.deviceName {
+                line += ", \(device) at \(output.sampleRate) Hz, \(output.channels) ch"
+            }
+            line += ", \(output.xruns) glitches"
+            if let error = output.error { line += ", error: \(error)" }
+            lines.append(line)
+        }
+        lines.append("")
+        lines.append("Devices:")
+        for device in devices {
+            lines.append(
+                "  \(device.name)\(device.isDefault ? " (default)" : ""): \(device.channels) ch, \(device.sampleRate) Hz"
+            )
+        }
+        lines.append("")
+        lines.append("Recent events (UTC):")
+        let formatter = ISO8601DateFormatter()
+        for event in events.suffix(100) {
+            lines.append("  \(formatter.string(from: event.date)) [\(event.level)] \(event.message)")
+        }
+        return lines.joined(separator: "\n")
     }
 
     func openLogFolder() {
