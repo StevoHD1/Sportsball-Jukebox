@@ -102,7 +102,7 @@ struct CueButton: View {
                 hasProblems: !problems.isEmpty,
                 isBusy: isBusy
             )
-            .overlay(shape.strokeBorder(borderColor, lineWidth: isDropTarget || isLearning ? 3 : 1))
+            .overlay(shape.strokeBorder(borderColor, lineWidth: isDropTarget || isLearning || state.playing ? 3 : 1))
             .contentShape(shape)
         }
         .buttonStyle(.plain)
@@ -160,7 +160,10 @@ struct CueButton: View {
         if isDropTarget { return .accentColor }
         if isLearning { return .orange }
         if !problems.isEmpty { return .orange }
-        return state.playing ? .green : Color.secondary.opacity(0.25)
+        // Playing pads keep their own colour, so a thick white border (and
+        // the progress fill) marks them; a green border would be lost on a
+        // green pad.
+        return state.playing ? .white : Color.secondary.opacity(0.25)
     }
 
     private var helpText: String {
@@ -229,7 +232,7 @@ private struct PadFace: View {
 
             if let image {
                 // The picture fills the pad; a dark fade at the bottom keeps
-                // the title readable, and a green wash shows it playing.
+                // the title readable.
                 Color.clear
                     .overlay(
                         Image(nsImage: image)
@@ -244,9 +247,6 @@ private struct PadFace: View {
                     endPoint: .bottom
                 )
                 .clipShape(shape)
-                if state.playing {
-                    shape.fill(Color.green.opacity(0.35))
-                }
             }
 
             GeometryReader { geometry in
@@ -358,7 +358,6 @@ private struct PadFace: View {
 
     private var background: Color {
         guard let cue else { return Color.secondary.opacity(0.12) }
-        if state.playing { return Color.green.opacity(0.85) }
         let base = PadColor.color(named: cue.color)
         // Ready pads show their exact colour (so it can be matched); pads
         // that can't play are faded.
