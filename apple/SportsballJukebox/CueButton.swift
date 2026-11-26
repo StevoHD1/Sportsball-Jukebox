@@ -40,6 +40,20 @@ enum PadColor: String, CaseIterable {
         )
     }
 
+    /// A small colour swatch for menus (not a template image, so menus
+    /// keep its colour).
+    static func swatch(_ color: Color) -> NSImage {
+        let image = NSImage(size: NSSize(width: 14, height: 14), flipped: false) { rect in
+            NSColor(color).setFill()
+            NSBezierPath(roundedRect: rect.insetBy(dx: 1, dy: 1), xRadius: 3, yRadius: 3).fill()
+            NSColor.black.withAlphaComponent(0.25).setStroke()
+            NSBezierPath(roundedRect: rect.insetBy(dx: 1, dy: 1), xRadius: 3, yRadius: 3).stroke()
+            return true
+        }
+        image.isTemplate = false
+        return image
+    }
+
     /// "#RRGGBB" for a colour from the colour picker.
     static func hex(_ color: Color) -> String? {
         guard let rgb = NSColor(color).usingColorSpace(.sRGB) else { return nil }
@@ -346,7 +360,9 @@ private struct PadFace: View {
         guard let cue else { return Color.secondary.opacity(0.12) }
         if state.playing { return Color.green.opacity(0.85) }
         let base = PadColor.color(named: cue.color)
-        return state.ready ? base.opacity(0.75) : base.opacity(0.35)
+        // Ready pads show their exact colour (so it can be matched); pads
+        // that can't play are faded.
+        return state.ready ? base : base.opacity(0.35)
     }
 
     private var timeText: String {

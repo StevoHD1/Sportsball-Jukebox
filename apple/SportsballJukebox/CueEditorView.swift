@@ -249,15 +249,7 @@ private struct EditorHeader: View {
                 }
                 .frame(width: 200)
 
-                Picker("Colour", selection: color) {
-                    ForEach(PadColor.allCases, id: \.self) { c in
-                        Text(c.rawValue.capitalized).tag(c.rawValue)
-                    }
-                    if PadColor(rawValue: color.wrappedValue) == nil {
-                        Text("Custom").tag(color.wrappedValue)
-                    }
-                }
-                .frame(width: 150)
+                ColourMenu(draft: $draft)
                 ColorPicker("Custom colour", selection: customColor, supportsOpacity: false)
                     .labelsHidden()
                     .help("Any colour")
@@ -328,13 +320,6 @@ private struct EditorHeader: View {
 
     private var gainLabel: String {
         draft.gain <= 0.0001 ? "-∞ dB" : String(format: "%+.1f dB", 20 * log10(Double(draft.gain)))
-    }
-
-    private var color: Binding<String> {
-        Binding(
-            get: { draft.color ?? PadColor.blue.rawValue },
-            set: { draft.color = $0 }
-        )
     }
 
     private var customColor: Binding<Color> {
@@ -1671,5 +1656,84 @@ private struct ActionRow: View {
 
     private var bank: Binding<Int> {
         Binding(get: { action.bank ?? 0 }, set: { action.bank = $0 })
+    }
+}
+
+// MARK: - Colour
+
+/// The pad's colour: presets, and every colour already used in the show
+/// (so another pad's exact colour is one click, no eyedropper needed).
+private struct ColourMenu: View {
+    @EnvironmentObject private var model: AppModel
+    @Binding var draft: CueDoc
+
+    private struct UsedColour: Hashable {
+        var value: String
+        var pads: [String]
+    }
+
+    var body: some View {
+        Menu {
+            Section("Presets") {
+                ForEach(PadColor.allCases, id: \.self) { preset in
+                    Button {
+                        draft.color = preset.rawValue
+                    } label: {
+                        Label {
+                            Text(preset.rawValue.capitalized)
+                        } icon: {
+                            Image(nsImage: PadColor.swatch(preset.color))
+                        }
+                    }
+                }
+            }
+            if !used.isEmpty {
+                Section("Used in this show") {
+                    ForEach(used, id: \.value) { entry in
+                        Button {
+                            draft.color = entry.value
+                        } label: {
+                            Label {
+                                Text(describe(entry))
+                            } icon: {
+                                Image(nsImage: PadColor.swatch(PadColor.color(named: entry.value)))
+                            }
+                        }
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 6) {
+                Image(nsImage: PadColor.swatch(PadColor.color(named: current)))
+                Text(name(of: current))
+            }
+        }
+        .fixedSize()
+        .help("Pick a preset or a colour another pad already uses; the colour well next to it picks any colour")
+    }
+
+    private var current: String { draft.color ?? PadColor.blue.rawValue }
+
+    /// Custom colours other pads use, most used first.
+    private var used: [UsedColour] {
+        var byColour: [String: [String]] = [:]
+        for cue in model.show.cues where cue.slot != draft.slot {
+            guard let value = cue.color, PadColor(rawValue: value) == nil else { continue }
+            let title = cue.title.isEmpty ? "Pad \(cue.slot + 1)" : cue.title
+            byColour[value.uppercased(), default: []].append(title)
+        }
+        return byColour
+            .map { UsedColour(value: $0.key, pads: $0.value) }
+            .sorted { ($0.pads.count, $1.value) > ($1.pads.count, $0.value) }
+    }
+
+    private func describe(_ entry: UsedColour) -> String {
+        let shown = entry.pads.prefix(2).joined(separator: ", ")
+        let more = entry.pads.count > 2 ? " +\(entry.pads.count - 2)" : ""
+        return "\(shown)\(more)  \(entry.value)"
+    }
+
+    private func name(of value: String) -> String {
+        PadColor(rawValue: value)?.rawValue.capitalized ?? value.uppercased()
     }
 }
