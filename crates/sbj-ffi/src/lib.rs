@@ -1026,6 +1026,36 @@ pub unsafe extern "C" fn sbj_session_set_pad_defaults_json(
     }
 }
 
+/// Replaces the show's colour presets with a JSON array
+/// `[{"name", "value": "#RRGGBB"}]`. With `recolor`, pads using a preset
+/// whose colour changed (matched by name) take the new colour.
+///
+/// # Safety
+/// `session` must be null or a live session; `json` a valid string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sbj_session_set_show_colors_json(
+    session: *const SbjSession,
+    json: *const c_char,
+    recolor: bool,
+) -> SbjStatus {
+    // SAFETY: forwarded caller contract.
+    let colors: Vec<sbj_session::ShowColor> =
+        match unsafe { required_str(json, "json") }.and_then(|j| {
+            serde_json::from_str(j)
+                .map_err(|e| fail(SbjStatus::InvalidArgument, format!("bad colours: {e}")))
+        }) {
+            Ok(c) => c,
+            Err(status) => return status,
+        };
+    // SAFETY: forwarded caller contract.
+    unsafe {
+        with_session(session, |s| {
+            s.lock().set_show_colors(colors, recolor);
+            SbjStatus::Ok
+        })
+    }
+}
+
 /// The show's audio library as JSON: `[{"file", "used_by": [slot],
 /// "loaded", "duration": s|null, "loudness": LUFS|null, "error":
 /// string|null}]`. Free with `sbj_string_free`.

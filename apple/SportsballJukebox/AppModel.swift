@@ -495,6 +495,36 @@ final class AppModel: ObservableObject {
         }
     }
 
+    // MARK: - Colour presets
+
+    @Published var showingColours = false
+
+    /// Replaces the show's colour presets; with `recolor`, pads using a
+    /// preset whose colour changed follow it.
+    func setShowColors(_ colors: [ShowColor], recolor: Bool) {
+        report { try session.setShowColors(colors, recolor: recolor) }
+        refreshShow(undo: "Colour Presets")
+    }
+
+    /// Asks for a name and saves `value` ("#RRGGBB") as a preset.
+    func saveColourPreset(_ value: String) {
+        let alert = NSAlert()
+        alert.messageText = "Save Colour Preset"
+        alert.informativeText = "The preset is saved with the show, so it's there on any Mac."
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
+        field.placeholderString = "e.g. Home red"
+        alert.accessoryView = field
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let name = field.stringValue.trimmingCharacters(in: .whitespaces)
+        guard !name.isEmpty else { return }
+        var colors = show.colors.filter { $0.name != name }
+        colors.append(ShowColor(name: name, value: value))
+        setShowColors(colors, recolor: false)
+    }
+
     // MARK: - Live transport
 
     /// Scrubbing in Now Playing.

@@ -49,6 +49,7 @@ cat > "$demo/Demo.sbjshow" <<JSON
   "preview_output": 1,
   "level_match": -16,
   "pad_defaults": {"color": "teal", "fade_out": 1.0},
+  "colors": [{"name": "Home red", "value": "#C8102E"}, {"name": "Sponsor gold", "value": "#E0A21B"}],
   "outputs": [
     {"name": "Arena", "backup": {"id": "unknown", "name": "Null Audio Device"}},
     {"name": "Concourse", "device": {"id": "unknown", "name": "Null Audio Device"}}

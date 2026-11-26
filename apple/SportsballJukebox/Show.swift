@@ -38,6 +38,14 @@ struct ShowDoc: Codable, Equatable {
     var padDefaults: PadDefaults?
     /// Banks (0-based) with Multiplay off.
     var singlePlay: [Int] = []
+    /// Named colour presets kept with the show.
+    var colors: [ShowColor] = []
+
+    /// The preset with this colour value, if any.
+    func preset(for value: String?) -> ShowColor? {
+        guard let value else { return nil }
+        return colors.first { $0.value.caseInsensitiveCompare(value) == .orderedSame }
+    }
 
     enum CodingKeys: String, CodingKey {
         case format, version, name, slots, columns, banks, outputs, cues, controls
@@ -48,6 +56,7 @@ struct ShowDoc: Codable, Equatable {
         case rundown, library
         case padDefaults = "pad_defaults"
         case singlePlay = "single_play"
+        case colors
     }
 
     /// Global slot numbers of a bank's pads.
@@ -75,6 +84,7 @@ struct ShowDoc: Codable, Equatable {
         library = try c.value(.library, or: [])
         padDefaults = try c.decodeIfPresent(PadDefaults.self, forKey: .padDefaults)
         singlePlay = try c.value(.singlePlay, or: [])
+        colors = try c.value(.colors, or: [])
         outputs = try c.value(.outputs, or: outputs)
         cues = try c.value(.cues, or: cues)
     }
@@ -126,6 +136,13 @@ struct ControlsDoc: Codable, Equatable {
         case rundownGo = "rundown_go"
         case fadeLast = "fade_last"
     }
+}
+
+/// A named pad colour kept with the show.
+struct ShowColor: Codable, Equatable, Hashable {
+    var name: String
+    /// "#RRGGBB".
+    var value: String
 }
 
 /// How a pad treats its bank's Multiplay setting.

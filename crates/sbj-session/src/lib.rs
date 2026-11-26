@@ -56,7 +56,7 @@ pub use show::{
     ActionDoc, ActionKind, ClipDoc, ControlsDoc, CueDoc, CueProblem, CurveDoc, DEFAULT_FADE_OUT,
     DeviceRef, FireAction, FireActionKind, MAX_PADS_PER_BANK, MAX_SLOTS, MarkerDoc, MidiKind,
     MidiTrigger, OutputDoc, PadDefaults, PadTarget, PlayMode, PlaylistDoc, Retrigger, RouteDoc,
-    RundownItem, Show, ShowError, TargetDoc,
+    RundownItem, Show, ShowColor, ShowError, TargetDoc,
 };
 
 /// How often to retry an output whose devices are all unavailable.

@@ -5,7 +5,7 @@
 
 use sbj_backend::AudioBackend;
 
-use crate::show::PadDefaults;
+use crate::show::{PadDefaults, ShowColor};
 use crate::{Result, Session, SessionError, ShowError};
 
 /// One library file, for display.
@@ -88,6 +88,54 @@ impl<B: AudioBackend> Session<B> {
             self.dirty = true;
         }
         Ok(())
+    }
+
+    /// Replaces the show's colour presets. Entries without a name or a
+    /// valid "#RRGGBB" are dropped. With `recolor`, pads (and the new-pad
+    /// default) using a preset whose colour changed, matched by name, get
+    /// the new colour. Returns how many pads were recoloured.
+    pub fn set_show_colors(&mut self, colors: Vec<ShowColor>, recolor: bool) -> usize {
+        let colors: Vec<ShowColor> = colors
+            .into_iter()
+            .filter_map(|c| {
+                let name = c.name.trim().to_string();
+                let value = ShowColor::normalize(&c.value)?;
+                (!name.is_empty()).then_some(ShowColor { name, value })
+            })
+            .collect();
+        let mut recolored = 0;
+        if recolor {
+            for new in &colors {
+                let Some(old) = self.show.colors.iter().find(|o| o.name == new.name) else {
+                    continue;
+                };
+                if old.value == new.value {
+                    continue;
+                }
+                let old_value = old.value.clone();
+                let matches = |c: &Option<String>| {
+                    c.as_deref()
+                        .and_then(ShowColor::normalize)
+                        .is_some_and(|v| v == old_value)
+                };
+                for cue in &mut self.show.cues {
+                    if matches(&cue.color) {
+                        cue.color = Some(new.value.clone());
+                        recolored += 1;
+                    }
+                }
+                if let Some(defaults) = &mut self.show.pad_defaults
+                    && matches(&defaults.color)
+                {
+                    defaults.color = Some(new.value.clone());
+                }
+            }
+        }
+        if self.show.colors != colors || recolored > 0 {
+            self.show.colors = colors;
+            self.dirty = true;
+        }
+        recolored
     }
 
     /// Settings for new pads (`None` = the built-in defaults).

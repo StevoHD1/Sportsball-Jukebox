@@ -1666,6 +1666,7 @@ private struct ActionRow: View {
 private struct ColourMenu: View {
     @EnvironmentObject private var model: AppModel
     @Binding var draft: CueDoc
+    @State private var managing = false
 
     private struct UsedColour: Hashable {
         var value: String
@@ -1674,7 +1675,22 @@ private struct ColourMenu: View {
 
     var body: some View {
         Menu {
-            Section("Presets") {
+            if !model.show.colors.isEmpty {
+                Section("Show colours") {
+                    ForEach(model.show.colors, id: \.self) { preset in
+                        Button {
+                            draft.color = preset.value
+                        } label: {
+                            Label {
+                                Text(preset.name)
+                            } icon: {
+                                Image(nsImage: PadColor.swatch(PadColor.color(named: preset.value)))
+                            }
+                        }
+                    }
+                }
+            }
+            Section("Standard") {
                 ForEach(PadColor.allCases, id: \.self) { preset in
                     Button {
                         draft.color = preset.rawValue
@@ -1702,6 +1718,11 @@ private struct ColourMenu: View {
                     }
                 }
             }
+            Divider()
+            Button("Save This Colour as a Preset…") {
+                model.saveColourPreset(PadColor.hex(PadColor.color(named: current)) ?? current)
+            }
+            Button("Manage Colour Presets…") { managing = true }
         } label: {
             HStack(spacing: 6) {
                 Image(nsImage: PadColor.swatch(PadColor.color(named: current)))
@@ -1709,7 +1730,11 @@ private struct ColourMenu: View {
             }
         }
         .fixedSize()
-        .help("Pick a preset or a colour another pad already uses; the colour well next to it picks any colour")
+        .help("Pick a show colour, a standard colour, or one another pad already uses; the colour well next to it picks any colour")
+        .sheet(isPresented: $managing) {
+            ColourPresetsView()
+                .environmentObject(model)
+        }
     }
 
     private var current: String { draft.color ?? PadColor.blue.rawValue }
@@ -1718,7 +1743,8 @@ private struct ColourMenu: View {
     private var used: [UsedColour] {
         var byColour: [String: [String]] = [:]
         for cue in model.show.cues where cue.slot != draft.slot {
-            guard let value = cue.color, PadColor(rawValue: value) == nil else { continue }
+            guard let value = cue.color, PadColor(rawValue: value) == nil,
+                  model.show.preset(for: value) == nil else { continue }
             let title = cue.title.isEmpty ? "Pad \(cue.slot + 1)" : cue.title
             byColour[value.uppercased(), default: []].append(title)
         }
@@ -1734,6 +1760,7 @@ private struct ColourMenu: View {
     }
 
     private func name(of value: String) -> String {
-        PadColor(rawValue: value)?.rawValue.capitalized ?? value.uppercased()
+        if let preset = model.show.preset(for: value) { return preset.name }
+        return PadColor(rawValue: value)?.rawValue.capitalized ?? value.uppercased()
     }
 }

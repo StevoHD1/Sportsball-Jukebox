@@ -75,6 +75,9 @@ int main(void) {
           == SBJ_STATUS_OK);
     CHECK(sbj_session_set_pad_defaults_json(s, "{\"fade_in\":\"x\"}") == SBJ_STATUS_INVALID_ARGUMENT);
     CHECK(sbj_session_set_pad_defaults_json(s, NULL) == SBJ_STATUS_OK);
+    CHECK(sbj_session_set_show_colors_json(s, "[{\"name\":\"Home\",\"value\":\"#c8102e\"}]", true)
+          == SBJ_STATUS_OK);
+    CHECK(sbj_session_set_show_colors_json(s, "nope", false) == SBJ_STATUS_INVALID_ARGUMENT);
     char add[512];
     snprintf(add, sizeof add, "[\"%s\", \"elsewhere.wav\"]", wav);
     CHECK(sbj_session_add_to_library_json(s, add) == SBJ_STATUS_OK);

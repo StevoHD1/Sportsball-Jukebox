@@ -153,6 +153,11 @@ SbjStatus sbj_session_set_bank_multiplay(const SbjSession *session, uint32_t ban
 
 /* ---- Library ------------------------------------------------------------ */
 
+/* Colour presets (the show's "colors"): [{"name", "value": "#RRGGBB"}].
+ * With recolor, pads using a preset whose colour changed (by name) take
+ * the new colour. Invalid entries are dropped. */
+SbjStatus sbj_session_set_show_colors_json(const SbjSession *session, const char *json, bool recolor);
+
 /* Settings for new pads: {"color"?, "fade_in"?, "fade_out"?, "loop"?,
  * "group"?, "output"?, "duck"?, "trim_silence"?, "level_match"?}
  * (the show file's "pad_defaults"); NULL or "null" = built-in. The app

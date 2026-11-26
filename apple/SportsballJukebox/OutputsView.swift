@@ -317,6 +317,7 @@ struct ShowSettingsView: View {
 
 /// What a new pad starts with when audio is dropped on an empty pad.
 private struct PadDefaultsEditor: View {
+    @EnvironmentObject private var model: AppModel
     @Binding var defaults: PadDefaults
     let outputs: [OutputDoc]
 
@@ -326,10 +327,14 @@ private struct PadDefaultsEditor: View {
                 Text("Colour")
                 Picker("Colour", selection: color) {
                     Text("Default").tag("")
+                    ForEach(model.show.colors, id: \.self) { preset in
+                        Text(preset.name).tag(preset.value)
+                    }
                     ForEach(PadColor.allCases, id: \.self) { c in
                         Text(c.rawValue.capitalized).tag(c.rawValue)
                     }
-                    if let custom = defaults.color, PadColor(rawValue: custom) == nil {
+                    if let custom = defaults.color, PadColor(rawValue: custom) == nil,
+                       model.show.preset(for: custom) == nil {
                         Text("Custom").tag(custom)
                     }
                 }

@@ -213,6 +213,12 @@ final class EngineSession: @unchecked Sendable {
         try Engine.check(sbj_session_save_with_audio(handle, url.path))
     }
 
+    // MARK: Colour presets
+
+    func setShowColors(_ colors: [ShowColor], recolor: Bool) throws {
+        try Engine.check(sbj_session_set_show_colors_json(handle, try ShowDoc.encode(colors), recolor))
+    }
+
     // MARK: Live transport
 
     func seekCue(slot: Int, seconds: Double) throws {

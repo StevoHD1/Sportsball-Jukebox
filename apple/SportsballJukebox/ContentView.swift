@@ -83,6 +83,10 @@ struct ContentView: View {
             PreflightView()
                 .environmentObject(model)
         }
+        .sheet(isPresented: $model.showingColours) {
+            ColourPresetsView()
+                .environmentObject(model)
+        }
         .sheet(isPresented: $model.showingLog) {
             GameLogView()
                 .environmentObject(model)

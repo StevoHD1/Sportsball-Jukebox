@@ -126,6 +126,26 @@ pub struct Show {
     /// bank's other pads.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub single_play: Vec<u32>,
+    /// Named colour presets for pads ("Home red" = "#C8102E").
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub colors: Vec<ShowColor>,
+}
+
+/// A named pad colour kept with the show.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShowColor {
+    pub name: String,
+    /// "#RRGGBB".
+    pub value: String,
+}
+
+impl ShowColor {
+    /// "#RRGGBB" (upper case) if `value` is one, else `None`.
+    pub fn normalize(value: &str) -> Option<String> {
+        let hex = value.trim().strip_prefix('#')?;
+        (hex.len() == 6 && hex.chars().all(|c| c.is_ascii_hexdigit()))
+            .then(|| format!("#{}", hex.to_ascii_uppercase()))
+    }
 }
 
 /// Settings for new pads (applied by the app when it creates a pad).
@@ -277,6 +297,7 @@ impl Default for Show {
             library: Vec::new(),
             pad_defaults: None,
             single_play: Vec::new(),
+            colors: Vec::new(),
         }
     }
 }
