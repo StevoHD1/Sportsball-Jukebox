@@ -40,15 +40,12 @@ jobs:
             -lpthread -ldl -lm -o smoke
           ./smoke
 
-  # macOS minutes cost 10x on private repos, so this runs only for pull
-  # requests, pushes to main, version tags, and manual runs (Actions tab
-  # -> Run workflow).
+  # Runs for every push, pull request, tag, release and manual run (the
+  # repo is public, so macOS minutes are free). Manual runs on a branch
+  # also commit fresh screenshots.
   macos:
     name: Test and build app (macOS)
     needs: linux
-    if: >-
-      github.event_name != 'push' || github.ref == 'refs/heads/main' ||
-      startsWith(github.ref, 'refs/tags/v')
     runs-on: macos-15
     timeout-minutes: 30
     permissions:

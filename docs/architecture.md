@@ -666,8 +666,9 @@ sounds at once. CI reruns this on every macOS build.
 - CI (`.github/workflows/ci.yml`): Linux runs fmt, clippy, tests and the C
   smoke test on every push. macOS runs tests, then builds a universal
   (arm64 + x86_64) ad-hoc-signed `Sportsball Jukebox.app`, zipped as a
-  downloadable artifact. It runs only on PRs, `main` and manual runs,
-  because macOS minutes cost 10× on private repos.
+  downloadable artifact, on every push, PR, tag and manual run (free,
+  as the repo is public). Manual runs on a branch also commit fresh
+  screenshots.
 - No Apple Developer account yet, so builds are ad-hoc signed, not
   notarized. See `docs/testing-on-mac.md` for opening them.
 
